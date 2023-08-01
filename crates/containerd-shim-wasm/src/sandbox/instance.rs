@@ -37,11 +37,11 @@ impl<Engine: Send + Sync + Clone> InstanceConfig<Engine> {
         Self {
             engine,
             namespace,
+            containerd_address,
             stdin: None,
             stdout: None,
             stderr: None,
             bundle: None,
-            containerd_address,
         }
     }
 

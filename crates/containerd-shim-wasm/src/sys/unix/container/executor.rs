@@ -12,7 +12,8 @@ use libcontainer::workload::{
 };
 use oci_spec::runtime::Spec;
 
-use crate::container::{Engine, PathResolve, RuntimeContext, Stdio};
+use crate::container::{Engine, PathResolve, RuntimeContext, Stdio, WasiContext};
+use crate::sandbox::oci::OciArtifact;
 
 #[derive(Clone)]
 enum InnerExecutor {
@@ -26,6 +27,7 @@ pub(crate) struct Executor<E: Engine> {
     engine: E,
     stdio: Stdio,
     inner: OnceCell<InnerExecutor>,
+    oci_artifacts: Option<Vec<OciArtifact>>,
 }
 
 impl<E: Engine> LibcontainerExecutor for Executor<E> {
@@ -49,7 +51,13 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
             }
             InnerExecutor::Wasm => {
                 log::info!("calling start function");
-                match self.engine.run_wasi(spec, self.stdio.take()) {
+                match self.engine.run_wasi(
+                    &WasiContext {
+                        spec,
+                        oci_artifacts: self.oci_artifacts.clone(),
+                    },
+                    self.stdio.take(),
+                ) {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
                         log::info!("error running start function: {err}");
@@ -62,17 +70,22 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
 }
 
 impl<E: Engine> Executor<E> {
-    pub fn new(engine: E, stdio: Stdio) -> Self {
+    pub fn new(engine: E, stdio: Stdio, oci_artifacts: Option<Vec<OciArtifact>>) -> Self {
         Self {
             engine,
             stdio,
             inner: Default::default(),
+            oci_artifacts,
         }
     }
 
     fn inner(&self, spec: &Spec) -> &InnerExecutor {
+        let is_wasm = self.oci_artifacts.is_some();
         self.inner.get_or_init(|| {
-            if is_linux_container(spec).is_ok() {
+            // if the spec has oci annotations we know it is wasm so short circuit checks
+            if is_wasm {
+                InnerExecutor::Wasm
+            } else if is_linux_container(spec).is_ok() {
                 InnerExecutor::Linux
             } else if self.engine.can_handle(spec).is_ok() {
                 InnerExecutor::Wasm

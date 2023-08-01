@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use containerd_shim_wasm::container::{
     Engine, Instance, PathResolve, RuntimeContext, Stdio, WasiEntrypoint,
 };
@@ -36,13 +36,27 @@ impl Engine for WasmtimeEngine {
 
         log::info!("wasi context ready");
         let WasiEntrypoint { path, func } = ctx.wasi_entrypoint();
-        let path = path
-            .resolve_in_path_or_cwd()
-            .next()
-            .context("module not found")?;
 
-        log::info!("loading module from file {path:?}");
-        let module = Module::from_file(&self.engine, &path)?;
+        let module = match ctx.oci_artifacts() {
+            Some(modules) => {
+                log::info!("loading module from OCI Artifact");
+                if modules.len() != 1 {
+                    bail!("only a single module is supported when using OCI Artifact")
+                }
+                let m = modules.first().unwrap();
+                Module::from_binary(&self.engine, &m.layer)?
+            }
+            None => {
+                log::info!("loading module from file");
+                let path = path
+                    .resolve_in_path_or_cwd()
+                    .next()
+                    .context("module not found")?;
+
+                Module::from_file(&self.engine, path)?
+            }
+        };
+
         let mut linker = Linker::new(&self.engine);
 
         wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;

@@ -15,7 +15,9 @@ use nix::unistd::Pid;
 use crate::container::Engine;
 use crate::sandbox::instance::{ExitCode, Wait};
 use crate::sandbox::instance_utils::{determine_rootdir, get_instance_root, instance_exists};
-use crate::sandbox::{Error as SandboxError, Instance as SandboxInstance, InstanceConfig, Stdio};
+use crate::sandbox::{
+    containerd, Error as SandboxError, Instance as SandboxInstance, InstanceConfig, Stdio,
+};
 use crate::sys::container::executor::Executor;
 
 static DEFAULT_CONTAINER_ROOT_DIR: &str = "/run/containerd";
@@ -39,8 +41,13 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         let rootdir = determine_rootdir(&bundle, &namespace, rootdir)?;
         let stdio = Stdio::init_from_cfg(cfg)?;
 
+        // check if container is OCI artifact and attempt to read the module
+        let mut ctrd_client =
+            containerd::Client::connect(cfg.get_containerd_address(), &namespace)?;
+        let modules = ctrd_client.load_modules(id.clone());
+
         ContainerBuilder::new(id.clone(), SyscallType::Linux)
-            .with_executor(Executor::new(engine, stdio))
+            .with_executor(Executor::new(engine, stdio, modules))
             .with_root_path(rootdir.clone())?
             .as_init(&bundle)
             .with_systemd(false)
