@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use oci_spec::runtime::Spec;
 
+use crate::sandbox::oci::OciArtifact;
+
 pub trait RuntimeContext {
     // ctx.args() returns arguments from the runtime spec process field, including the
     // path to the entrypoint executable.
@@ -20,11 +22,36 @@ pub trait RuntimeContext {
     //   "my_module.wat" -> { path: "my_module.wat", func: "_start" }
     //   "#init" -> { path: "", func: "init" }
     fn wasi_entrypoint(&self) -> WasiEntrypoint;
+
+    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>>;
 }
 
 pub struct WasiEntrypoint {
     pub path: PathBuf,
     pub func: String,
+}
+
+pub(crate) struct WasiContext<'a> {
+    pub spec: &'a Spec,
+    pub oci_artifacts: Option<Vec<OciArtifact>>,
+}
+
+impl RuntimeContext for WasiContext<'_> {
+    fn args(&self) -> &[String] {
+        self.spec.args()
+    }
+
+    fn entrypoint(&self) -> Option<&Path> {
+        self.spec.entrypoint()
+    }
+
+    fn wasi_entrypoint(&self) -> WasiEntrypoint {
+        self.spec.wasi_entrypoint()
+    }
+
+    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>> {
+        self.oci_artifacts.clone()
+    }
 }
 
 impl RuntimeContext for Spec {
@@ -47,6 +74,10 @@ impl RuntimeContext for Spec {
             path: PathBuf::from(path),
             func: func.to_string(),
         }
+    }
+
+    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>> {
+        None
     }
 }
 
