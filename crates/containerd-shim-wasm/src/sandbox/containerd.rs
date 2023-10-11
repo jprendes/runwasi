@@ -1,5 +1,4 @@
 #![cfg(unix)]
-use artifact_spec::image::ImageManifest;
 use containerd_client;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::content_client::ContentClient;
@@ -10,6 +9,7 @@ use containerd_client::services::v1::{
 use containerd_client::tonic::transport::Channel;
 use containerd_client::tonic::{self, Streaming};
 use containerd_client::with_namespace;
+use oci_spec::image::ImageManifest;
 use tokio::runtime::Runtime;
 use tonic::Request;
 
@@ -156,7 +156,7 @@ impl Client {
         };
 
         match manifest.artifact_type() {
-            Some(artifact_spec::image::MediaType::Other(s))
+            Some(oci_spec::image::MediaType::Other(s))
                 if s == oci::COMPONENT_ARTIFACT_TYPE || s == oci::MODULE_ARTIFACT_TYPE =>
             {
                 log::info!("manifest with OCI Artifact of type {}", s)
@@ -180,13 +180,8 @@ impl Client {
                     return None;
                 }
             };
-            // temporarily convert from one type to the version used by rest of code base
             oci_artifacts.push(OciArtifact {
-                config: oci_spec::image::Descriptor::new(
-                    oci_spec::image::MediaType::from(layer.media_type().to_string().as_str()),
-                    layer.size(),
-                    layer.digest(),
-                ),
+                config: layer.clone(),
                 layer: module,
             });
         }

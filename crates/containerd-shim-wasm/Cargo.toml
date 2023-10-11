@@ -22,7 +22,6 @@ git-version = "0.3.5"
 libc = { workspace = true }
 log = { workspace = true }
 oci-spec = { workspace = true }
-artifact-spec = { package = "oci-spec", git="https://github.com/containers/oci-spec-rs", rev="c109fe19b2548a86f20e48b18831bf17eb72c494", features = ["runtime"] }
 protobuf = "3.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
