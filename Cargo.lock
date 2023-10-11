@@ -582,7 +582,7 @@ dependencies = [
  "log",
  "mio",
  "nix 0.26.4",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oci-spec",
  "os_pipe",
  "page_size",
  "prctl",
@@ -625,8 +625,7 @@ dependencies = [
  "libcontainer",
  "log",
  "nix 0.27.1",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "oci-spec 0.6.2 (git+https://github.com/containers/oci-spec-rs?rev=c109fe19b2548a86f20e48b18831bf17eb72c494)",
+ "oci-spec",
  "protobuf 3.2.0",
  "serde",
  "serde_json",
@@ -648,7 +647,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oci-spec",
  "serde_json",
  "tempfile",
  "wat",
@@ -663,7 +662,7 @@ dependencies = [
  "containerd-shim-wasm",
  "libc",
  "log",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oci-spec",
  "serial_test",
  "ttrpc",
  "wasmedge-sdk",
@@ -678,7 +677,7 @@ dependencies = [
  "containerd-shim",
  "containerd-shim-wasm",
  "log",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oci-spec",
  "serial_test",
  "tokio",
  "ttrpc",
@@ -695,7 +694,7 @@ dependencies = [
  "containerd-shim",
  "containerd-shim-wasm",
  "log",
- "oci-spec 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "oci-spec",
  "serial_test",
  "ttrpc",
  "wasi-common",
@@ -2506,25 +2505,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "oci-spec"
-version = "0.6.2"
-source = "git+https://github.com/containers/oci-spec-rs?rev=c109fe19b2548a86f20e48b18831bf17eb72c494#c109fe19b2548a86f20e48b18831bf17eb72c494"
-dependencies = [
- "derive_builder",
- "getset",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "oci-tar-builder"
 version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
  "log",
- "oci-spec 0.6.2 (git+https://github.com/containers/oci-spec-rs?rev=c109fe19b2548a86f20e48b18831bf17eb72c494)",
+ "oci-spec",
  "serde",
  "serde_json",
  "sha256",
@@ -4669,7 +4656,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
- "oci-spec 0.6.2 (git+https://github.com/containers/oci-spec-rs?rev=c109fe19b2548a86f20e48b18831bf17eb72c494)",
+ "oci-spec",
  "oci-tar-builder",
  "sha256",
  "tar",
