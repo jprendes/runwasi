@@ -23,7 +23,7 @@ pub trait RuntimeContext {
     //   "#init" -> { path: "", func: "init" }
     fn wasi_entrypoint(&self) -> WasiEntrypoint;
 
-    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>>;
+    fn oci_artifacts(&self) -> &[OciArtifact];
 }
 
 pub struct WasiEntrypoint {
@@ -33,30 +33,13 @@ pub struct WasiEntrypoint {
 
 pub(crate) struct WasiContext<'a> {
     pub spec: &'a Spec,
-    pub oci_artifacts: Option<Vec<OciArtifact>>,
+    pub oci_artifacts: &'a [OciArtifact],
 }
 
 impl RuntimeContext for WasiContext<'_> {
     fn args(&self) -> &[String] {
-        self.spec.args()
-    }
-
-    fn entrypoint(&self) -> Option<&Path> {
-        self.spec.entrypoint()
-    }
-
-    fn wasi_entrypoint(&self) -> WasiEntrypoint {
-        self.spec.wasi_entrypoint()
-    }
-
-    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>> {
-        self.oci_artifacts.clone()
-    }
-}
-
-impl RuntimeContext for Spec {
-    fn args(&self) -> &[String] {
-        self.process()
+        self.spec
+            .process()
             .as_ref()
             .and_then(|p| p.args().as_ref())
             .map(|a| a.as_slice())
@@ -76,8 +59,8 @@ impl RuntimeContext for Spec {
         }
     }
 
-    fn oci_artifacts(&self) -> Option<Vec<OciArtifact>> {
-        None
+    fn oci_artifacts(&self) -> &[OciArtifact] {
+        self.oci_artifacts
     }
 }
 
@@ -99,9 +82,13 @@ mod tests {
                     .build()?,
             )
             .build()?;
-        let spec = &spec;
 
-        let args = spec.args();
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let args = ctx.args();
         assert_eq!(args.len(), 1);
         assert_eq!(args[0], "hello.wat");
 
@@ -114,9 +101,13 @@ mod tests {
             .root(RootBuilder::default().path("rootfs").build()?)
             .process(ProcessBuilder::default().cwd("/").args(vec![]).build()?)
             .build()?;
-        let spec = &spec;
 
-        let args = spec.args();
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let args = ctx.args();
         assert_eq!(args.len(), 0);
 
         Ok(())
@@ -137,9 +128,13 @@ mod tests {
                     .build()?,
             )
             .build()?;
-        let spec = &spec;
 
-        let args = spec.args();
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let args = ctx.args();
         assert_eq!(args.len(), 3);
         assert_eq!(args[0], "hello.wat");
         assert_eq!(args[1], "echo");
@@ -154,9 +149,13 @@ mod tests {
             .root(RootBuilder::default().path("rootfs").build()?)
             .process(ProcessBuilder::default().cwd("/").args(vec![]).build()?)
             .build()?;
-        let spec = &spec;
 
-        let path = spec.wasi_entrypoint().path;
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let path = ctx.wasi_entrypoint().path;
         assert!(path.as_os_str().is_empty());
 
         Ok(())
@@ -177,9 +176,13 @@ mod tests {
                     .build()?,
             )
             .build()?;
-        let spec = &spec;
 
-        let WasiEntrypoint { path, func } = spec.wasi_entrypoint();
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let WasiEntrypoint { path, func } = ctx.wasi_entrypoint();
         assert_eq!(path, Path::new("hello.wat"));
         assert_eq!(func, "foo");
 
@@ -201,9 +204,13 @@ mod tests {
                     .build()?,
             )
             .build()?;
-        let spec = &spec;
 
-        let WasiEntrypoint { path, func } = spec.wasi_entrypoint();
+        let ctx = WasiContext {
+            spec: &spec,
+            oci_artifacts: &[],
+        };
+
+        let WasiEntrypoint { path, func } = ctx.wasi_entrypoint();
         assert_eq!(path, Path::new("/root/hello.wat"));
         assert_eq!(func, "_start");
 

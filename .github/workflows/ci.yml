@@ -72,7 +72,7 @@ jobs:
       os: ${{ matrix.os }}
       runtime: ${{ matrix.runtime }}
 
-  e2e-k8s:
+  e2e-kind:
     name: ${{ matrix.runtime }}
     needs: [build-ubuntu, test-image]
     strategy:
@@ -86,13 +86,13 @@ jobs:
       runtime: ${{ matrix.runtime }}
       test-command: make test/k8s-${{ matrix.runtime }}
 
-  e2e-k8s-oci:
+  e2e-kind-oci:
     name: ${{ matrix.runtime }}
     needs: [build-ubuntu, test-image-oci]
     strategy:
       matrix:
         os: ["ubuntu-22.04"]
-        runtime: ["wasmtime", "wasmedge"]
+        runtime: ["wasmtime", "wasmedge", "wasmer"]
     uses: ./.github/workflows/action-test-kind.yml
     with:
       os: ${{ matrix.os }}

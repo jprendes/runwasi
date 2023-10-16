@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 ttrpc = { workspace = true }
 wat = { workspace = true }
 tokio = { version = "1.28.2", features = [ "full" ] }
+futures = { version = "0.3.28" }
 
 [target.'cfg(unix)'.dependencies]
 caps = "0.5"

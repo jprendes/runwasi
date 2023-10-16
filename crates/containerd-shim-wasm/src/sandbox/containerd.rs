@@ -1,20 +1,21 @@
 #![cfg(unix)]
+
+use std::path::Path;
+
 use containerd_client;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::content_client::ContentClient;
 use containerd_client::services::v1::images_client::ImagesClient;
-use containerd_client::services::v1::{
-    GetContainerRequest, GetImageRequest, ReadContentRequest, ReadContentResponse,
-};
+use containerd_client::services::v1::{GetContainerRequest, GetImageRequest, ReadContentRequest};
 use containerd_client::tonic::transport::Channel;
-use containerd_client::tonic::{self, Streaming};
-use containerd_client::with_namespace;
-use oci_spec::image::ImageManifest;
+use containerd_client::{tonic, with_namespace};
+use futures::TryStreamExt;
+use oci_spec::image::{ImageManifest, MediaType};
 use tokio::runtime::Runtime;
 use tonic::Request;
 
 use crate::sandbox::error::{Error as ShimError, Result};
-use crate::sandbox::oci::{self, OciArtifact};
+use crate::sandbox::oci::{self, OciArtifact, COMPONENT_ARTIFACT_TYPE, MODULE_ARTIFACT_TYPE};
 
 pub struct Client {
     inner: Channel,
@@ -25,16 +26,14 @@ pub struct Client {
 // sync wrapper implementation from https://tokio.rs/tokio/topics/bridging
 impl Client {
     // wrapper around connection that will establish a connection and create a client
-    pub fn connect(address: String, namespace: &str) -> Result<Client> {
+    pub fn connect(address: impl AsRef<Path>, namespace: impl ToString) -> Result<Client> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
 
-        let inner = rt.block_on(async {
-            containerd_client::connect(address)
-                .await
-                .map_err(|err| ShimError::Others(err.to_string()))
-        })?;
+        let inner = rt
+            .block_on(containerd_client::connect(address))
+            .map_err(|err| ShimError::Others(err.to_string()))?;
 
         Ok(Client {
             inner,
@@ -43,149 +42,115 @@ impl Client {
         })
     }
 
-    fn content(&self) -> ContentClient<Channel> {
-        ContentClient::new(self.inner.clone())
-    }
-
-    fn images(&self) -> ImagesClient<Channel> {
-        ImagesClient::new(self.inner.clone())
-    }
-
-    fn containers(&self) -> ContainersClient<Channel> {
-        ContainersClient::new(self.inner.clone())
-    }
-
     // wrapper around read that will read the entire content file
-    pub fn read_content(&mut self, digest: String) -> Result<Vec<u8>> {
-        let resp: Result<Vec<u8>> = self.rt.block_on(async {
+    pub fn read_content(&self, digest: impl ToString) -> Result<Vec<u8>> {
+        self.rt.block_on(async {
             let req = ReadContentRequest {
-                digest,
-                offset: 0,
-                size: 0,
+                digest: digest.to_string(),
+                ..Default::default()
             };
             let req = with_namespace!(req, self.namespace);
-            let response: tonic::Response<Streaming<ReadContentResponse>> = self
-                .content()
+            ContentClient::new(self.inner.clone())
                 .read(req)
                 .await
-                .map_err(|err| ShimError::Others(err.to_string()))?;
-            let mut resp_stream = response.into_inner();
-
-            let mut data = vec![];
-            while let Some(mut next_message) = resp_stream
-                .message()
-                .await
                 .map_err(|err| ShimError::Others(err.to_string()))?
-            {
-                data.append(&mut next_message.data);
-            }
-
-            Ok(data)
-        });
-
-        resp
+                .into_inner()
+                .map_ok(|msg| msg.data)
+                .try_concat()
+                .await
+                .map_err(|err| ShimError::Others(err.to_string()))
+        })
     }
 
-    pub fn get_image_content_sha(&mut self, image_name: String) -> Option<String> {
-        let resp: Result<Option<String>> = self.rt.block_on(async {
-            let req = GetImageRequest { name: image_name };
+    pub fn get_image_content_sha(&self, image_name: impl ToString) -> Option<String> {
+        self.rt.block_on(async {
+            let name = image_name.to_string();
+            let req = GetImageRequest { name };
             let req = with_namespace!(req, self.namespace);
-            let resp = self
-                .images()
+            let digest = ImagesClient::new(self.inner.clone())
                 .get(req)
                 .await
-                .map_err(|err| ShimError::Others(err.to_string()))?;
-
-            let image_response = resp.into_inner();
-            match image_response.image {
-                Some(i) => {
-                    let desc = i.target.unwrap();
-                    Ok(Some(desc.digest))
-                }
-                None => Ok(None),
-            }
-        });
-        match resp {
-            Ok(layer_option) => layer_option,
-            Err(_) => None,
-        }
+                .ok()?
+                .into_inner()
+                .image?
+                .target?
+                .digest;
+            Some(digest)
+        })
     }
 
-    pub fn get_oci_image(&mut self, container_name: String) -> Option<String> {
-        let resp: Result<Option<String>> = self.rt.block_on(async {
-            let req = GetContainerRequest { id: container_name };
+    pub fn get_oci_image(&self, container_name: impl ToString) -> Option<String> {
+        self.rt.block_on(async {
+            let id = container_name.to_string();
+            let req = GetContainerRequest { id };
             let req = with_namespace!(req, self.namespace);
-            let resp = self
-                .containers()
+            let image = ContainersClient::new(self.inner.clone())
                 .get(req)
                 .await
-                .map_err(|err| ShimError::Others(err.to_string()))?;
-
-            let container_response = resp.into_inner();
-            match container_response.container {
-                Some(c) => Ok(Some(c.image)),
-                None => Ok(None),
-            }
-        });
-
-        match resp {
-            Ok(layer_option) => layer_option,
-            Err(_) => None,
-        }
+                .ok()?
+                .into_inner()
+                .container?
+                .image;
+            Some(image)
+        })
     }
 
     // load module will query the containerd store to find an image that has an ArtifactType of WASM OCI Artifact
     // If found it continues to parse the manifest and return the layers that contains the WASM modules
     // and possibly other configuration artifacts
-    pub fn load_modules(&mut self, containerd_id: String) -> Option<Vec<oci::OciArtifact>> {
-        let image_name = self.get_oci_image(containerd_id.clone())?;
-        let container_digest = self.get_image_content_sha(image_name)?;
-        let manifest = match self.read_content(container_digest) {
-            Ok(m) => m,
-            Err(_) => {
-                log::warn!("failed to read manifest");
-                return None;
-            }
-        };
-        let manifest = match ImageManifest::from_reader(manifest.as_slice()) {
-            Ok(m) => m,
-            Err(_) => {
-                log::warn!("failed to parse manifest");
-                return None;
-            }
-        };
+    pub fn load_modules(&self, containerd_id: impl ToString) -> Option<Vec<oci::OciArtifact>> {
+        let image_name = self.get_oci_image(containerd_id.to_string())?;
+        let digest = self.get_image_content_sha(image_name)?;
+        let manifest = self
+            .read_content(digest)
+            .ok()
+            .or_else(log_warn("failed to read manifest"))?;
+        let manifest = manifest.as_slice();
+        let manifest = ImageManifest::from_reader(manifest)
+            .ok()
+            .or_else(log_warn("failed to parse manifest"))?;
 
-        match manifest.artifact_type() {
-            Some(oci_spec::image::MediaType::Other(s))
-                if s == oci::COMPONENT_ARTIFACT_TYPE || s == oci::MODULE_ARTIFACT_TYPE =>
-            {
-                log::info!("manifest with OCI Artifact of type {}", s)
+        let artifact_type = manifest
+            .artifact_type()
+            .as_ref()
+            .or_else(log_info("manifest is not an OCI Artifact"))?;
+
+        match artifact_type {
+            MediaType::Other(s) if s == COMPONENT_ARTIFACT_TYPE || s == MODULE_ARTIFACT_TYPE => {
+                log::info!("manifest with OCI Artifact of type {s}");
             }
-            Some(m) => {
-                log::info!("manifest is not an known OCI Artifact: {}", m);
-                return None;
-            }
-            None => {
-                log::info!("manifest is not an OCI Artifact");
+            _ => {
+                log::info!("manifest is not a known OCI Artifact: {artifact_type}");
                 return None;
             }
         }
 
-        let mut oci_artifacts = Vec::<oci::OciArtifact>::new();
-        for layer in manifest.layers().iter() {
-            let module = match self.read_content(layer.digest().clone()) {
-                Ok(m) => m,
-                Err(_) => {
-                    log::warn!("failed to read module layer");
-                    return None;
-                }
-            };
-            oci_artifacts.push(OciArtifact {
-                config: layer.clone(),
-                layer: module,
-            });
-        }
+        manifest
+            .layers()
+            .iter()
+            .map(|config| {
+                self.read_content(config.digest())
+                    .map(|module| OciArtifact {
+                        config: config.clone(),
+                        layer: module,
+                    })
+            })
+            .collect::<Result<Vec<_>>>()
+            .ok()
+            .or_else(log_warn("failed to read module layer"))
+    }
+}
 
-        Some(oci_artifacts)
+fn log_warn<T>(msg: impl std::fmt::Display) -> impl FnOnce() -> Option<T> {
+    move || {
+        log::warn!("{msg}");
+        None
+    }
+}
+
+fn log_info<T>(msg: impl std::fmt::Display) -> impl FnOnce() -> Option<T> {
+    move || {
+        log::warn!("{msg}");
+        None
     }
 }

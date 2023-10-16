@@ -42,9 +42,9 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         let stdio = Stdio::init_from_cfg(cfg)?;
 
         // check if container is OCI artifact and attempt to read the module
-        let mut ctrd_client =
-            containerd::Client::connect(cfg.get_containerd_address(), &namespace)?;
-        let modules = ctrd_client.load_modules(id.clone());
+        let modules = containerd::Client::connect(cfg.get_containerd_address(), &namespace)?
+            .load_modules(&id)
+            .unwrap_or_default();
 
         ContainerBuilder::new(id.clone(), SyscallType::Linux)
             .with_executor(Executor::new(engine, stdio, modules))
