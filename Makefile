@@ -128,7 +128,7 @@ dist/clean:
 .PHONY: install/all
 install/all: test-image/clean build install test-image load
 
-.PHONY: instal/oci/all
+.PHONY: install/oci/all
 install/oci/all: test-image/oci/clean build install test-image/oci load/oci
 
 .PHONY: test-image

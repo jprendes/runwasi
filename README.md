@@ -338,7 +338,7 @@ make test-image/oci
 make load/oci
 ```
 
-Run the image with `sudo ctr run --rm --runtime=io.containerd.[ wasmedge | wasmtime ].v1 --label application/vnd.bytecodealliance.wasm.module=oci.wasm ghcr.io/containerd/runwasi/wasi-demo-oci:latest testwasmoci`
+Run the image with `sudo ctr run --rm --runtime=io.containerd.[ wasmedge | wasmtime | wasmer ].v1 --label application/vnd.bytecodealliance.wasm.module=oci.wasm ghcr.io/containerd/runwasi/wasi-demo-oci:latest testwasmoci`
 
 ```
 sudo ctr run --rm --runtime=io.containerd.wasmtime.v1 ghcr.io/containerd/runwasi/wasi-demo-oci:latest testwasmoci wasi-demo-oci.wasm echo 'hello'

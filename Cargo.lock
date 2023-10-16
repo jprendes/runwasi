@@ -620,6 +620,7 @@ dependencies = [
  "crossbeam",
  "dbus",
  "env_logger",
+ "futures",
  "git-version",
  "libc",
  "libcontainer",

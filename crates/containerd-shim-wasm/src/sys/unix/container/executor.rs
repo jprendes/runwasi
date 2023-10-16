@@ -27,7 +27,7 @@ pub(crate) struct Executor<E: Engine> {
     engine: E,
     stdio: Stdio,
     inner: OnceCell<InnerExecutor>,
-    oci_artifacts: Option<Vec<OciArtifact>>,
+    oci_artifacts: Vec<OciArtifact>,
 }
 
 impl<E: Engine> LibcontainerExecutor for Executor<E> {
@@ -51,13 +51,7 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
             }
             InnerExecutor::Wasm => {
                 log::info!("calling start function");
-                match self.engine.run_wasi(
-                    &WasiContext {
-                        spec,
-                        oci_artifacts: self.oci_artifacts.clone(),
-                    },
-                    self.stdio.take(),
-                ) {
+                match self.engine.run_wasi(&self.ctx(spec), self.stdio.take()) {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
                         log::info!("error running start function: {err}");
@@ -70,7 +64,7 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
 }
 
 impl<E: Engine> Executor<E> {
-    pub fn new(engine: E, stdio: Stdio, oci_artifacts: Option<Vec<OciArtifact>>) -> Self {
+    pub fn new(engine: E, stdio: Stdio, oci_artifacts: Vec<OciArtifact>) -> Self {
         Self {
             engine,
             stdio,
@@ -79,15 +73,22 @@ impl<E: Engine> Executor<E> {
         }
     }
 
+    fn ctx<'a>(&'a self, spec: &'a Spec) -> WasiContext<'a> {
+        let oci_artifacts = &self.oci_artifacts;
+        WasiContext {
+            spec,
+            oci_artifacts,
+        }
+    }
+
     fn inner(&self, spec: &Spec) -> &InnerExecutor {
-        let is_wasm = self.oci_artifacts.is_some();
         self.inner.get_or_init(|| {
             // if the spec has oci annotations we know it is wasm so short circuit checks
-            if is_wasm {
+            if !self.oci_artifacts.is_empty() {
                 InnerExecutor::Wasm
-            } else if is_linux_container(spec).is_ok() {
+            } else if is_linux_container(&self.ctx(spec)).is_ok() {
                 InnerExecutor::Linux
-            } else if self.engine.can_handle(spec).is_ok() {
+            } else if self.engine.can_handle(&self.ctx(spec)).is_ok() {
                 InnerExecutor::Wasm
             } else {
                 InnerExecutor::CantHandle
@@ -96,8 +97,8 @@ impl<E: Engine> Executor<E> {
     }
 }
 
-fn is_linux_container(spec: &Spec) -> Result<()> {
-    let executable = spec
+fn is_linux_container(ctx: &impl RuntimeContext) -> Result<()> {
+    let executable = ctx
         .entrypoint()
         .context("no entrypoint provided")?
         .resolve_in_path()
