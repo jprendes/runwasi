@@ -62,7 +62,7 @@ impl Client {
         })
     }
 
-    pub fn get_image_content_sha(&self, image_name: impl ToString) -> Option<String> {
+    pub fn get_image_content_sha(&self, image_name: impl ToString) -> Result<String> {
         self.rt.block_on(async {
             let name = image_name.to_string();
             let req = GetImageRequest { name };
@@ -70,16 +70,16 @@ impl Client {
             let digest = ImagesClient::new(self.inner.clone())
                 .get(req)
                 .await
-                .ok()?
+                .map_err(|err| ShimError::Others(err.to_string()))?
                 .into_inner()
-                .image?
-                .target?
+                .image.ok_or(ShimError::Others(format!("failed to get image content sha for image {}", image_name.to_string())))?
+                .target.ok_or(ShimError::Others(format!("failed to get image content sha for image {}", image_name.to_string())))?
                 .digest;
-            Some(digest)
+            Ok(digest)
         })
     }
 
-    pub fn get_oci_image(&self, container_name: impl ToString) -> Option<String> {
+    pub fn get_image(&self, container_name: impl ToString) -> Result<String> {
         self.rt.block_on(async {
             let id = container_name.to_string();
             let req = GetContainerRequest { id };
@@ -87,33 +87,29 @@ impl Client {
             let image = ContainersClient::new(self.inner.clone())
                 .get(req)
                 .await
-                .ok()?
+                .map_err(|err| ShimError::Others(err.to_string()))?
                 .into_inner()
-                .container?
+                .container
+                .ok_or(ShimError::Others(format!("failed to get image for container {}", container_name.to_string())))?
                 .image;
-            Some(image)
+            Ok(image)
         })
     }
 
     // load module will query the containerd store to find an image that has an ArtifactType of WASM OCI Artifact
     // If found it continues to parse the manifest and return the layers that contains the WASM modules
     // and possibly other configuration artifacts
-    pub fn load_modules(&self, containerd_id: impl ToString) -> Option<Vec<oci::OciArtifact>> {
-        let image_name = self.get_oci_image(containerd_id.to_string())?;
+    pub fn load_modules(&self, containerd_id: impl ToString) -> Result<Vec<oci::OciArtifact>> {
+        let image_name = self.get_image(containerd_id.to_string())?;
         let digest = self.get_image_content_sha(image_name)?;
-        let manifest = self
-            .read_content(digest)
-            .ok()
-            .or_else(log_warn("failed to read manifest"))?;
+        let manifest = self.read_content(digest)?;
         let manifest = manifest.as_slice();
-        let manifest = ImageManifest::from_reader(manifest)
-            .ok()
-            .or_else(log_warn("failed to parse manifest"))?;
+        let manifest = ImageManifest::from_reader(manifest)?;
 
         let artifact_type = manifest
             .artifact_type()
             .as_ref()
-            .or_else(log_info("manifest is not an OCI Artifact"))?;
+            .ok_or(ShimError::Others("manifest is not an OCI Artifact".to_string()))?;
 
         match artifact_type {
             MediaType::Other(s) if s == COMPONENT_ARTIFACT_TYPE || s == MODULE_ARTIFACT_TYPE => {
@@ -121,11 +117,11 @@ impl Client {
             }
             _ => {
                 log::info!("manifest is not a known OCI Artifact: {artifact_type}");
-                return None;
+                return Ok([].to_vec());
             }
         }
 
-        manifest
+       Ok(manifest
             .layers()
             .iter()
             .map(|config| {
@@ -135,22 +131,6 @@ impl Client {
                         layer: module,
                     })
             })
-            .collect::<Result<Vec<_>>>()
-            .ok()
-            .or_else(log_warn("failed to read module layer"))
-    }
-}
-
-fn log_warn<T>(msg: impl std::fmt::Display) -> impl FnOnce() -> Option<T> {
-    move || {
-        log::warn!("{msg}");
-        None
-    }
-}
-
-fn log_info<T>(msg: impl std::fmt::Display) -> impl FnOnce() -> Option<T> {
-    move || {
-        log::warn!("{msg}");
-        None
+            .collect::<Result<Vec<_>>>()?)
     }
 }

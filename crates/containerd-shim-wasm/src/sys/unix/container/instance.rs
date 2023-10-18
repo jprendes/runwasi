@@ -44,7 +44,10 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         // check if container is OCI artifact and attempt to read the module
         let modules = containerd::Client::connect(cfg.get_containerd_address(), &namespace)?
             .load_modules(&id)
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                log::warn!("Error obtaining wasm layers for container {}.  Will attempt to use files inside containerd image. Error: {}", id.clone(), e);
+                vec![]
+            });
 
         ContainerBuilder::new(id.clone(), SyscallType::Linux)
             .with_executor(Executor::new(engine, stdio, modules))
