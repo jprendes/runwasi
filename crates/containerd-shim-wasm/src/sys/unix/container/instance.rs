@@ -41,7 +41,7 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         let rootdir = determine_rootdir(&bundle, &namespace, rootdir)?;
         let stdio = Stdio::init_from_cfg(cfg)?;
 
-        // check if container is OCI artifact and attempt to read the module
+        // check if container is OCI image with wasm layers and attempt to read the module
         let modules = containerd::Client::connect(cfg.get_containerd_address(), &namespace)?
             .load_modules(&id)
             .unwrap_or_else(|e| {

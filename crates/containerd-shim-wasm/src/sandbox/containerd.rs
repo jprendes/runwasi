@@ -10,12 +10,12 @@ use containerd_client::services::v1::{GetContainerRequest, GetImageRequest, Read
 use containerd_client::tonic::transport::Channel;
 use containerd_client::{tonic, with_namespace};
 use futures::TryStreamExt;
-use oci_spec::image::{ImageManifest, MediaType};
+use oci_spec::image::{ImageManifest, Os};
 use tokio::runtime::Runtime;
 use tonic::Request;
 
 use crate::sandbox::error::{Error as ShimError, Result};
-use crate::sandbox::oci::{self, OciArtifact, COMPONENT_ARTIFACT_TYPE, MODULE_ARTIFACT_TYPE};
+use crate::sandbox::oci::{self, WasmLayer};
 
 pub struct Client {
     inner: Channel,
@@ -72,8 +72,16 @@ impl Client {
                 .await
                 .map_err(|err| ShimError::Others(err.to_string()))?
                 .into_inner()
-                .image.ok_or(ShimError::Others(format!("failed to get image content sha for image {}", image_name.to_string())))?
-                .target.ok_or(ShimError::Others(format!("failed to get image content sha for image {}", image_name.to_string())))?
+                .image
+                .ok_or(ShimError::Others(format!(
+                    "failed to get image content sha for image {}",
+                    image_name.to_string()
+                )))?
+                .target
+                .ok_or(ShimError::Others(format!(
+                    "failed to get image content sha for image {}",
+                    image_name.to_string()
+                )))?
                 .digest;
             Ok(digest)
         })
@@ -90,47 +98,51 @@ impl Client {
                 .map_err(|err| ShimError::Others(err.to_string()))?
                 .into_inner()
                 .container
-                .ok_or(ShimError::Others(format!("failed to get image for container {}", container_name.to_string())))?
+                .ok_or(ShimError::Others(format!(
+                    "failed to get image for container {}",
+                    container_name.to_string()
+                )))?
                 .image;
             Ok(image)
         })
     }
 
-    // load module will query the containerd store to find an image that has an ArtifactType of WASM OCI Artifact
+    // load module will query the containerd store to find an image that has an OS of type 'wasm'
     // If found it continues to parse the manifest and return the layers that contains the WASM modules
-    // and possibly other configuration artifacts
-    pub fn load_modules(&self, containerd_id: impl ToString) -> Result<Vec<oci::OciArtifact>> {
+    // and possibly other configuration layers.
+    pub fn load_modules(&self, containerd_id: impl ToString) -> Result<Vec<oci::WasmLayer>> {
         let image_name = self.get_image(containerd_id.to_string())?;
         let digest = self.get_image_content_sha(image_name)?;
         let manifest = self.read_content(digest)?;
         let manifest = manifest.as_slice();
         let manifest = ImageManifest::from_reader(manifest)?;
 
-        let artifact_type = manifest
-            .artifact_type()
+        let os = manifest
+            .config()
+            .platform()
             .as_ref()
-            .ok_or(ShimError::Others("manifest is not an OCI Artifact".to_string()))?;
+            .ok_or(ShimError::Others("failed to extract OS".to_string()))?
+            .os();
 
-        match artifact_type {
-            MediaType::Other(s) if s == COMPONENT_ARTIFACT_TYPE || s == MODULE_ARTIFACT_TYPE => {
-                log::info!("manifest with OCI Artifact of type {s}");
+        match os {
+            Os::Other(s) if s == "wasm" => {
+                log::info!("manifest with WASM OCI image format. Found OS as: {s}");
             }
             _ => {
-                log::info!("manifest is not a known OCI Artifact: {artifact_type}");
+                log::info!("manifest is not in WASM OCI image format. Found OS as {os}");
                 return Ok([].to_vec());
             }
         }
 
-       Ok(manifest
+        manifest
             .layers()
             .iter()
             .map(|config| {
-                self.read_content(config.digest())
-                    .map(|module| OciArtifact {
-                        config: config.clone(),
-                        layer: module,
-                    })
+                self.read_content(config.digest()).map(|module| WasmLayer {
+                    config: config.clone(),
+                    layer: module,
+                })
             })
-            .collect::<Result<Vec<_>>>()?)
+            .collect::<Result<Vec<_>>>()
     }
 }
