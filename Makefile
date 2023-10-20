@@ -7,6 +7,10 @@ RUNTIMES ?= wasmedge wasmtime wasmer
 CONTAINERD_NAMESPACE ?= default
 
 ifeq ($(CARGO),cross)
+# When changing targets with cross we can get errors related to glibc versions
+# https://github.com/cross-rs/cross/wiki/FAQ#glibc-version-error
+# by using override we can let user specify 'cross' but use the script instead
+override CARGO=./scripts/cross.sh
 # Set the default target as defined in Cross.toml
 TARGET ?= $(shell uname -m)-unknown-linux-musl
 # When using `cross` we need to run the tests outside the `cross` container.
@@ -150,7 +154,7 @@ bin/kind: test/k8s/Dockerfile
 
 # Use a static build of the shims for better compatibility.
 # Using cross defaults to x86_64-unknown-linux-musl, which creates a static build.
-test/k8s/_out/img-%: CARGO=cross
+test/k8s/_out/img-%: CARGO=cross TARGET=$(shell uname -m)-unknown-linux-musl
 test/k8s/_out/img-%: test/k8s/Dockerfile dist-%
 	mkdir -p $(@D) && $(DOCKER_BUILD) -f test/k8s/Dockerfile --build-arg="RUNTIME=$*" --iidfile=$(@) --load  .
 
@@ -193,3 +197,11 @@ test/k3s-%: dist/img.tar bin/k3s dist-%
 
 .PHONY: test/k3s/clean
 test/k3s/clean: bin/k3s/clean;
+
+.PHONY: clean
+clean:
+	rm -rf dist
+	rm -rf bin
+	$(MAKE) test-image/clean
+	$(MAKE) test/k8s/clean
+	$(MAKE) test/k3s/clean
