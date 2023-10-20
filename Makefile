@@ -28,7 +28,7 @@ override CARGO = cross
 endif
 
 ifeq ($(CARGO),cross)
-TARGET_DIR ?= ./target/build/$(TARGET)/
+override TARGET_DIR := $(or $(TARGET_DIR),./target/build/$(TARGET)/)
 # When using `cross` we need to run the tests outside the `cross` container.
 # We stop `cargo test` from running the tests with the `--no-run` flag.
 # We then need to run the generate test binary manually.
@@ -38,7 +38,7 @@ TEST_ARGS_SEP= --no-run --color=always --message-format=json | \
 	sed -E 's|^/target|$(TARGET_DIR)|' | \
 	xargs -I_ ./scripts/test-runner.sh ./_
 else
-TARGET_DIR ?= ./target/
+override TARGET_DIR := $(or $(TARGET_DIR),./target/)
 TEST_ARGS_SEP= --
 endif
 TARGET_FLAG = --target=$(TARGET) --target-dir=$(TARGET_DIR)
@@ -169,7 +169,7 @@ bin/kind: test/k8s/Dockerfile
 
 # Use a static build of the shims for better compatibility.
 # Using cross with no target defaults to <arch>-unknown-linux-musl, which creates a static binary.
-test/k8s/_out/img-%: CARGO=cross TARGET=
+test/k8s/_out/img-%: override CARGO=cross TARGET= TARGET_DIR=
 test/k8s/_out/img-%: test/k8s/Dockerfile dist-%
 	mkdir -p $(@D) && $(DOCKER_BUILD) -f test/k8s/Dockerfile --build-arg="RUNTIME=$*" --iidfile=$(@) --load  .
 
