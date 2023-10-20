@@ -6,26 +6,28 @@ TEST_IMG_NAME ?= wasmtest:latest
 RUNTIMES ?= wasmedge wasmtime wasmer
 CONTAINERD_NAMESPACE ?= default
 
+# We have a bit of fancy logic here to determine the target 
+# since we support building for gnu and musl
+# TARGET must evenutually match one of the values in the cross.toml
 HOST_TARGET = $(shell rustc --version -v | sed -En 's/host: (.*)/\1/p')
 
+# if TARGET is not set and we are using cross
+# default to musl to facilitate easier use shim on other distros becuase of the static build
+# otherwise use the host target
 ifeq ($(TARGET),)
 ifeq ($(CARGO),cross)
-TARGET = musl
+override TARGET = $(shell uname -m)-unknown-linux-musl
 else
-TARGET = $(HOST_TARGET)
+override TARGET = $(HOST_TARGET)
 endif
 endif
 
-ifeq ($(TARGET),musl)
-TARGET = $(shell uname -m)-unknown-linux-musl
-endif
-
+# always use cross when the target is not the host target
 ifneq ($(TARGET),$(HOST_TARGET))
-CARGO = cross
+override CARGO = cross
 endif
 
 ifeq ($(CARGO),cross)
-# Set the default target as defined in Cross.toml
 TARGET_DIR ?= ./target/build/$(TARGET)/
 # When using `cross` we need to run the tests outside the `cross` container.
 # We stop `cargo test` from running the tests with the `--no-run` flag.
@@ -166,8 +168,8 @@ bin/kind: test/k8s/Dockerfile
 	$(DOCKER_BUILD) --output=bin/ -f test/k8s/Dockerfile --target=kind .
 
 # Use a static build of the shims for better compatibility.
-# Using cross defaults to <arch>-unknown-linux-musl, which creates a static binary.
-test/k8s/_out/img-%: CARGO=cross TARGET=musl
+# Using cross with no target defaults to <arch>-unknown-linux-musl, which creates a static binary.
+test/k8s/_out/img-%: CARGO=cross TARGET=
 test/k8s/_out/img-%: test/k8s/Dockerfile dist-%
 	mkdir -p $(@D) && $(DOCKER_BUILD) -f test/k8s/Dockerfile --build-arg="RUNTIME=$*" --iidfile=$(@) --load  .
 
