@@ -5,11 +5,12 @@ LN ?= ln -sf
 TEST_IMG_NAME ?= wasmtest:latest
 RUNTIMES ?= wasmedge wasmtime wasmer
 CONTAINERD_NAMESPACE ?= default
+CARGO_TARGET_DIR?=$(PWD)/target
 
 ifeq ($(CARGO),cross)
 # Set the default target as defined in Cross.toml
 TARGET ?= $(shell uname -m)-unknown-linux-musl
-TARGET_DIR=./target/build/$(TARGET)
+TARGET_DIR=$(CARGO_TARGET_DIR)/build/$(TARGET)
 # When using `cross` we need to run the tests outside the `cross` container.
 # We stop `cargo test` from running the tests with the `--no-run` flag.
 # We then need to run the generate test binary manually.
@@ -19,7 +20,7 @@ TEST_ARGS_SEP= --no-run --color=always --message-format=json | \
 	xargs -I_ ./scripts/test-runner.sh ./_
 else
 TARGET ?= $(shell rustc --version -v | sed -En 's/host: (.*)/\1/p')
-TARGET_DIR ?= ./target
+TARGET_DIR ?= $(CARGO_TARGET_DIR)
 TEST_ARGS_SEP= --
 endif
 
