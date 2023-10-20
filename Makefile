@@ -7,12 +7,9 @@ RUNTIMES ?= wasmedge wasmtime wasmer
 CONTAINERD_NAMESPACE ?= default
 
 ifeq ($(CARGO),cross)
-# When changing targets with cross we can get errors related to glibc versions
-# https://github.com/cross-rs/cross/wiki/FAQ#glibc-version-error
-# by using override we can let user specify 'cross' but use the script instead
-override CARGO=./scripts/cross.sh
 # Set the default target as defined in Cross.toml
 TARGET ?= $(shell uname -m)-unknown-linux-musl
+TARGET_DIR=./target/build/$(TARGET)
 # When using `cross` we need to run the tests outside the `cross` container.
 # We stop `cargo test` from running the tests with the `--no-run` flag.
 # We then need to run the generate test binary manually.
@@ -22,6 +19,7 @@ TEST_ARGS_SEP= --no-run --color=always --message-format=json | \
 	xargs -I_ ./scripts/test-runner.sh ./_
 else
 TARGET ?= $(shell rustc --version -v | sed -En 's/host: (.*)/\1/p')
+TARGET_DIR ?= ./target
 TEST_ARGS_SEP= --
 endif
 
@@ -31,7 +29,7 @@ ifeq ($(OPT_PROFILE),release)
 RELEASE_FLAG = --release
 endif
 ifneq ($(TARGET),)
-TARGET_FLAG = --target=$(TARGET)
+TARGET_FLAG = --target=$(TARGET) --target-dir=$(TARGET_DIR)
 endif
 
 FEATURES_wasmedge = 
@@ -153,7 +151,7 @@ bin/kind: test/k8s/Dockerfile
 	$(DOCKER_BUILD) --output=bin/ -f test/k8s/Dockerfile --target=kind .
 
 # Use a static build of the shims for better compatibility.
-# Using cross defaults to x86_64-unknown-linux-musl, which creates a static build.
+# Using cross to <arch>-unknown-linux-musl, which creates a static build.
 test/k8s/_out/img-%: CARGO=cross TARGET=$(shell uname -m)-unknown-linux-musl
 test/k8s/_out/img-%: test/k8s/Dockerfile dist-%
 	mkdir -p $(@D) && $(DOCKER_BUILD) -f test/k8s/Dockerfile --build-arg="RUNTIME=$*" --iidfile=$(@) --load  .
@@ -200,8 +198,8 @@ test/k3s/clean: bin/k3s/clean;
 
 .PHONY: clean
 clean:
-	rm -rf dist
-	rm -rf bin
-	$(MAKE) test-image/clean
-	$(MAKE) test/k8s/clean
-	$(MAKE) test/k3s/clean
+	-rm -rf dist
+	-rm -rf bin
+	-$(MAKE) test-image/clean
+	-$(MAKE) test/k8s/clean
+	-$(MAKE) test/k3s/clean
