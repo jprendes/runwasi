@@ -44,8 +44,6 @@ jobs:
         timeout-minutes: 5
         run: |
           make test-${{ inputs.runtime }}
-        env:
-          CARGO_TARGET_DIR: /target
       - name: Package artifacts
         if: ${{ inputs.runtime != 'common' }}
         shell: bash
@@ -57,8 +55,6 @@ jobs:
           else
             tar -czf dist/containerd-shim-${{ inputs.runtime }}-${{ inputs.slug }}.tar.gz -T /dev/null
           fi
-        env:
-          CARGO_TARGET_DIR: /target
       - name: Upload artifacts
         if: ${{ inputs.runtime != 'common' }}
         uses: actions/upload-artifact@master

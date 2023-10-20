@@ -5,32 +5,46 @@ LN ?= ln -sf
 TEST_IMG_NAME ?= wasmtest:latest
 RUNTIMES ?= wasmedge wasmtime wasmer
 CONTAINERD_NAMESPACE ?= default
-CARGO_TARGET_DIR?=$(PWD)/target
+
+HOST_TARGET = $(shell rustc --version -v | sed -En 's/host: (.*)/\1/p')
+
+ifeq ($(TARGET),)
+ifeq ($(CARGO),cross)
+TARGET = musl
+else
+TARGET = $(HOST_TARGET)
+endif
+endif
+
+ifeq ($(TARGET),musl)
+TARGET = $(shell uname -m)-unknown-linux-musl
+endif
+
+ifneq ($(TARGET),$(HOST_TARGET))
+CARGO = cross
+endif
 
 ifeq ($(CARGO),cross)
 # Set the default target as defined in Cross.toml
-TARGET ?= $(shell uname -m)-unknown-linux-musl
-TARGET_DIR=$(CARGO_TARGET_DIR)/build/$(TARGET)
+TARGET_DIR ?= ./target/build/$(TARGET)/
 # When using `cross` we need to run the tests outside the `cross` container.
 # We stop `cargo test` from running the tests with the `--no-run` flag.
 # We then need to run the generate test binary manually.
 # For that we use `--message-format=json` and `jq` to find the name of the binary, `xargs` and execute it.
 TEST_ARGS_SEP= --no-run --color=always --message-format=json | \
 	jq -R '. as $$line | try (fromjson | .executable | strings) catch ($$line+"\n" | stderr | empty)' -r | \
+	sed -E 's|^/target|$(TARGET_DIR)|' | \
 	xargs -I_ ./scripts/test-runner.sh ./_
 else
-TARGET ?= $(shell rustc --version -v | sed -En 's/host: (.*)/\1/p')
-TARGET_DIR ?= $(CARGO_TARGET_DIR)
+TARGET_DIR ?= ./target/
 TEST_ARGS_SEP= --
 endif
+TARGET_FLAG = --target=$(TARGET) --target-dir=$(TARGET_DIR)
 
 OPT_PROFILE ?= debug
 RELEASE_FLAG :=
 ifeq ($(OPT_PROFILE),release)
 RELEASE_FLAG = --release
-endif
-ifneq ($(TARGET),)
-TARGET_FLAG = --target=$(TARGET) --target-dir=$(TARGET_DIR)
 endif
 
 FEATURES_wasmedge = 
@@ -114,7 +128,7 @@ install: $(RUNTIMES:%=install-%);
 
 install-%: build-%
 	mkdir -p $(PREFIX)/bin
-	$(INSTALL) target/$(TARGET)/$(OPT_PROFILE)/containerd-shim-$*-v1 $(PREFIX)/bin/
+	$(INSTALL) $(TARGET_DIR)/$(TARGET)/$(OPT_PROFILE)/containerd-shim-$*-v1 $(PREFIX)/bin/
 	$(LN) ./containerd-shim-$*-v1 $(PREFIX)/bin/containerd-shim-$*d-v1
 	$(LN) ./containerd-shim-$*-v1 $(PREFIX)/bin/containerd-$*d
 
@@ -152,8 +166,8 @@ bin/kind: test/k8s/Dockerfile
 	$(DOCKER_BUILD) --output=bin/ -f test/k8s/Dockerfile --target=kind .
 
 # Use a static build of the shims for better compatibility.
-# Using cross to <arch>-unknown-linux-musl, which creates a static build.
-test/k8s/_out/img-%: CARGO=cross TARGET=$(shell uname -m)-unknown-linux-musl
+# Using cross defaults to <arch>-unknown-linux-musl, which creates a static binary.
+test/k8s/_out/img-%: CARGO=cross TARGET=musl
 test/k8s/_out/img-%: test/k8s/Dockerfile dist-%
 	mkdir -p $(@D) && $(DOCKER_BUILD) -f test/k8s/Dockerfile --build-arg="RUNTIME=$*" --iidfile=$(@) --load  .
 
