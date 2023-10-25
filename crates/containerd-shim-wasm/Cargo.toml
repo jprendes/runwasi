@@ -33,7 +33,7 @@ wat = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 caps = "0.5"
 dbus = { version = "*", features = ["vendored"] }
-libcontainer = { workspace = true, features = ["systemd", "v1", "v2"]}
+libcontainer = { workspace = true, features = ["v1", "v2"]}
 nix = { workspace = true, features = ["sched", "mount"] }
 
 [target.'cfg(windows)'.dependencies]
