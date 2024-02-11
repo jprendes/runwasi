@@ -8,7 +8,7 @@ use oci_spec::runtime::Spec;
 use crate::container::path::PathResolve;
 use crate::sandbox::oci::WasmLayer;
 
-pub trait RuntimeContext {
+pub trait RuntimeContext: Send + Sync {
     // ctx.args() returns arguments from the runtime spec process field, including the
     // path to the entrypoint executable.
     fn args(&self) -> &[String];

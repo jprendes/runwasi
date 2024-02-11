@@ -53,7 +53,17 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
             }
             InnerExecutor::Wasm => {
                 log::info!("calling start function");
-                match self.engine.run_wasi(&self.ctx(spec), self.stdio.take()) {
+                let engine = &self.engine;
+                let stdio = self.stdio.take();
+                let ctx = self.ctx(spec);
+                let status = std::thread::scope(move |s| {
+                    // Run run_wasi in a new thread so that runtimes that
+                    // use tokio can do so.
+                    s.spawn(move || engine.run_wasi(&ctx, stdio))
+                        .join()
+                        .unwrap()
+                });
+                match status {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
                         log::info!("error running start function: {err}");

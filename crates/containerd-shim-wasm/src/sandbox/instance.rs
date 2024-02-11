@@ -1,7 +1,6 @@
 //! Abstractions for running/managing a wasm/wasi instance.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -113,37 +112,40 @@ impl<Engine: Send + Sync + Clone> InstanceConfig<Engine> {
 /// Instance is a trait that gets implemented by consumers of this library.
 /// This trait requires that any type implementing it is `'static`, similar to `std::any::Any`.
 /// This means that the type cannot contain a non-`'static` reference.
-pub trait Instance: 'static {
+pub trait Instance: 'static + Send + Sync {
     /// The WASI engine type
     type Engine: Send + Sync + Clone;
 
     /// Create a new instance
-    fn new(id: String, cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, Error>
+    fn new(
+        id: String,
+        cfg: Option<&InstanceConfig<Self::Engine>>,
+    ) -> impl std::future::Future<Output = Result<Self, Error>> + std::marker::Send
     where
         Self: Sized;
 
     /// Start the instance
     /// The returned value should be a unique ID (such as a PID) for the instance.
     /// Nothing internally should be using this ID, but it is returned to containerd where a user may want to use it.
-    fn start(&self) -> Result<u32, Error>;
+    fn start(&self) -> impl std::future::Future<Output = Result<u32, Error>> + std::marker::Send;
 
     /// Send a signal to the instance
-    fn kill(&self, signal: u32) -> Result<(), Error>;
+    fn kill(
+        &self,
+        signal: u32,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + std::marker::Send;
 
     /// Delete any reference to the instance
     /// This is called after the instance has exited.
-    fn delete(&self) -> Result<(), Error>;
+    fn delete(&self) -> impl std::future::Future<Output = Result<(), Error>> + std::marker::Send;
 
     /// Waits for the instance to finish and retunrs its exit code
     /// This is a blocking call.
-    fn wait(&self) -> (u32, DateTime<Utc>) {
-        self.wait_timeout(None).unwrap()
-    }
+    fn wait(&self) -> impl std::future::Future<Output = (u32, DateTime<Utc>)> + std::marker::Send;
 
     /// Waits for the instance to finish and retunrs its exit code
-    /// Returns None if the timeout is reached before the instance has finished.
     /// This is a blocking call.
-    fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)>;
+    fn try_wait(&self) -> Option<(u32, DateTime<Utc>)>;
 }
 
 /// This is used for the "pause" container with cri and is a no-op instance implementation.
@@ -155,15 +157,15 @@ pub struct Nop {
 
 impl Instance for Nop {
     type Engine = ();
-    fn new(_id: String, _cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, Error> {
+    async fn new(_id: String, _cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, Error> {
         Ok(Nop {
             exit_code: WaitableCell::new(),
         })
     }
-    fn start(&self) -> Result<u32, Error> {
+    async fn start(&self) -> Result<u32, Error> {
         Ok(std::process::id())
     }
-    fn kill(&self, signal: u32) -> Result<(), Error> {
+    async fn kill(&self, signal: u32) -> Result<(), Error> {
         let code = match signal as i32 {
             SIGKILL => 137,
             SIGINT | SIGTERM => 0,
@@ -176,11 +178,14 @@ impl Instance for Nop {
 
         Ok(())
     }
-    fn delete(&self) -> Result<(), Error> {
+    async fn delete(&self) -> Result<(), Error> {
         Ok(())
     }
-    fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)> {
-        self.exit_code.wait_timeout(t).copied()
+    async fn wait(&self) -> (u32, DateTime<Utc>) {
+        *self.exit_code.wait().await
+    }
+    fn try_wait(&self) -> Option<(u32, DateTime<Utc>)> {
+        self.exit_code.try_wait().copied()
     }
 }
 
@@ -189,44 +194,57 @@ mod noptests {
     use std::time::Duration;
 
     use super::*;
+    use crate::sandbox::utils::WithTimeout;
 
-    #[test]
-    fn test_nop_kill_sigkill() -> Result<(), Error> {
-        let nop = Nop::new("".to_string(), None)?;
+    #[tokio::test]
+    async fn test_nop_kill_sigkill() -> Result<(), Error> {
+        let nop = Nop::new("".to_string(), None).await?;
 
-        nop.kill(SIGKILL as u32)?;
+        nop.kill(SIGKILL as u32).await?;
 
-        let ec = nop.wait_timeout(Duration::from_secs(3)).unwrap();
+        let ec = nop
+            .wait()
+            .with_timeout(Duration::from_secs(3))
+            .await
+            .unwrap();
         assert_eq!(ec.0, 137);
         Ok(())
     }
 
-    #[test]
-    fn test_nop_kill_sigterm() -> Result<(), Error> {
-        let nop = Nop::new("".to_string(), None)?;
+    #[tokio::test]
+    async fn test_nop_kill_sigterm() -> Result<(), Error> {
+        let nop = Nop::new("".to_string(), None).await?;
 
-        nop.kill(SIGTERM as u32)?;
+        nop.kill(SIGTERM as u32).await?;
 
-        let ec = nop.wait_timeout(Duration::from_secs(3)).unwrap();
+        let ec = nop
+            .wait()
+            .with_timeout(Duration::from_secs(3))
+            .await
+            .unwrap();
         assert_eq!(ec.0, 0);
         Ok(())
     }
 
-    #[test]
-    fn test_nop_kill_sigint() -> Result<(), Error> {
-        let nop = Nop::new("".to_string(), None)?;
+    #[tokio::test]
+    async fn test_nop_kill_sigint() -> Result<(), Error> {
+        let nop = Nop::new("".to_string(), None).await?;
 
-        nop.kill(SIGINT as u32)?;
+        nop.kill(SIGINT as u32).await?;
 
-        let ec = nop.wait_timeout(Duration::from_secs(3)).unwrap();
+        let ec = nop
+            .wait()
+            .with_timeout(Duration::from_secs(3))
+            .await
+            .unwrap();
         assert_eq!(ec.0, 0);
         Ok(())
     }
 
-    #[test]
-    fn test_nop_delete_after_create() -> Result<(), Error> {
-        let nop = Nop::new("".to_string(), None)?;
-        nop.delete()?;
+    #[tokio::test]
+    async fn test_nop_delete_after_create() -> Result<(), Error> {
+        let nop = Nop::new("".to_string(), None).await?;
+        nop.delete().await?;
         Ok(())
     }
 }

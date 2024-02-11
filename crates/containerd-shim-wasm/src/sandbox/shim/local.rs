@@ -3,10 +3,8 @@ use std::fs::create_dir_all;
 use std::ops::Not;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::thread;
-use std::time::Duration;
 
-use anyhow::Context as AnyhowContext;
+use async_trait::async_trait;
 use containerd_shim::api::{
     ConnectRequest, ConnectResponse, CreateTaskRequest, CreateTaskResponse, DeleteRequest, Empty,
     KillRequest, ShutdownRequest, StartRequest, StartResponse, StateRequest, StateResponse,
@@ -14,9 +12,9 @@ use containerd_shim::api::{
 };
 use containerd_shim::error::Error as ShimError;
 use containerd_shim::protos::events::task::{TaskCreate, TaskDelete, TaskExit, TaskIO, TaskStart};
-use containerd_shim::protos::shim::shim_ttrpc::Task;
+use containerd_shim::protos::shim_async::Task;
 use containerd_shim::protos::types::task::Status;
-use containerd_shim::publisher::RemotePublisher;
+//use containerd_shim::publisher::RemotePublisher;
 use containerd_shim::util::IntoOption;
 use containerd_shim::{DeleteResponse, ExitSignal, TtrpcContext, TtrpcResult};
 use log::debug;
@@ -25,7 +23,7 @@ use oci_spec::runtime::Spec;
 use crate::sandbox::instance::{Instance, InstanceConfig};
 use crate::sandbox::shim::events::{EventSender, RemoteEventSender, ToTimestamp};
 use crate::sandbox::shim::instance_data::InstanceData;
-use crate::sandbox::{oci, Error, Result, SandboxService};
+use crate::sandbox::{oci, Error, Result /*, SandboxService*/};
 use crate::sys::metrics::get_metrics;
 
 #[cfg(test)]
@@ -96,7 +94,7 @@ fn is_cri_container(spec: &Spec) -> bool {
 
 // These are the same functions as in Task, but without the TtrcpContext, which is useful for testing
 impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
-    fn task_create(&self, req: CreateTaskRequest) -> Result<CreateTaskResponse> {
+    async fn task_create(&self, req: CreateTaskRequest) -> Result<CreateTaskResponse> {
         if !req.checkpoint().is_empty() || !req.parent_checkpoint().is_empty() {
             return Err(ShimError::Unimplemented("checkpoint is not supported".to_string()).into());
         }
@@ -151,9 +149,9 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         let instance = if self.is_empty() && is_cri_container(&spec) {
             // If it is cri, then this is the "pause" container, which we don't need to deal with.
             // TODO: maybe we can just go ahead and execute the actual container with runc?
-            InstanceData::new_base(req.id(), cfg)?
+            InstanceData::new_base(req.id(), cfg).await?
         } else {
-            InstanceData::new_instance(req.id(), cfg)?
+            InstanceData::new_instance(req.id(), cfg).await?
         };
 
         self.instances
@@ -161,19 +159,21 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
             .unwrap()
             .insert(req.id().to_string(), Arc::new(instance));
 
-        self.events.send(TaskCreate {
-            container_id: req.id,
-            bundle: req.bundle,
-            rootfs: req.rootfs,
-            io: Some(TaskIO {
-                stdin: req.stdin,
-                stdout: req.stdout,
-                stderr: req.stderr,
+        self.events
+            .send(TaskCreate {
+                container_id: req.id,
+                bundle: req.bundle,
+                rootfs: req.rootfs,
+                io: Some(TaskIO {
+                    stdin: req.stdin,
+                    stdout: req.stdout,
+                    stderr: req.stderr,
+                    ..Default::default()
+                })
+                .into(),
                 ..Default::default()
             })
-            .into(),
-            ..Default::default()
-        });
+            .await;
 
         debug!("create done");
 
@@ -187,39 +187,39 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         })
     }
 
-    fn task_start(&self, req: StartRequest) -> Result<StartResponse> {
+    async fn task_start(&self, req: StartRequest) -> Result<StartResponse> {
         if req.exec_id().is_empty().not() {
             return Err(ShimError::Unimplemented("exec is not supported".to_string()).into());
         }
 
         let i = self.get_instance(req.id())?;
-        let pid = i.start()?;
+        let pid = i.start().await?;
 
-        self.events.send(TaskStart {
-            container_id: req.id().into(),
-            pid,
-            ..Default::default()
-        });
+        self.events
+            .send(TaskStart {
+                container_id: req.id().into(),
+                pid,
+                ..Default::default()
+            })
+            .await;
 
         let events = self.events.clone();
 
         let id = req.id().to_string();
 
-        thread::Builder::new()
-            .name(format!("{id}-wait"))
-            .spawn(move || {
-                let (exit_code, timestamp) = i.wait();
-                events.send(TaskExit {
+        tokio::task::spawn(async move {
+            let (exit_code, timestamp) = i.wait().await;
+            events
+                .send(TaskExit {
                     container_id: id.clone(),
                     exit_status: exit_code,
                     exited_at: Some(timestamp.to_timestamp()).into(),
                     pid,
                     id,
                     ..Default::default()
-                });
-            })
-            .context("could not spawn thread to wait exit")
-            .map_err(Error::from)?;
+                })
+                .await;
+        });
 
         debug!("started: {:?}", req);
 
@@ -229,36 +229,38 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         })
     }
 
-    fn task_kill(&self, req: KillRequest) -> Result<Empty> {
+    async fn task_kill(&self, req: KillRequest) -> Result<Empty> {
         if !req.exec_id().is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
-        self.get_instance(req.id())?.kill(req.signal())?;
+        self.get_instance(req.id())?.kill(req.signal()).await?;
         Ok(Empty::new())
     }
 
-    fn task_delete(&self, req: DeleteRequest) -> Result<DeleteResponse> {
+    async fn task_delete(&self, req: DeleteRequest) -> Result<DeleteResponse> {
         if !req.exec_id().is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
         let i = self.get_instance(req.id())?;
 
-        i.delete()?;
+        i.delete().await?;
 
         let pid = i.pid().unwrap_or_default();
-        let (exit_code, timestamp) = i.wait_timeout(Duration::ZERO).unzip();
+        let (exit_code, timestamp) = i.try_wait().await.unzip();
         let timestamp = timestamp.map(ToTimestamp::to_timestamp);
 
         self.instances.write().unwrap().remove(req.id());
 
-        self.events.send(TaskDelete {
-            container_id: req.id().into(),
-            pid,
-            exit_status: exit_code.unwrap_or_default(),
-            exited_at: timestamp.clone().into(),
-            ..Default::default()
-        });
+        self.events
+            .send(TaskDelete {
+                container_id: req.id().into(),
+                pid,
+                exit_status: exit_code.unwrap_or_default(),
+                exited_at: timestamp.clone().into(),
+                ..Default::default()
+            })
+            .await;
 
         Ok(DeleteResponse {
             pid,
@@ -268,13 +270,13 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         })
     }
 
-    fn task_wait(&self, req: WaitRequest) -> Result<WaitResponse> {
+    async fn task_wait(&self, req: WaitRequest) -> Result<WaitResponse> {
         if !req.exec_id().is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
         let i = self.get_instance(req.id())?;
-        let (exit_code, timestamp) = i.wait();
+        let (exit_code, timestamp) = i.wait().await;
 
         Ok(WaitResponse {
             exit_status: exit_code,
@@ -283,14 +285,14 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         })
     }
 
-    fn task_state(&self, req: StateRequest) -> Result<StateResponse> {
+    async fn task_state(&self, req: StateRequest) -> Result<StateResponse> {
         if !req.exec_id().is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
         let i = self.get_instance(req.id())?;
         let pid = i.pid();
-        let (exit_code, timestamp) = i.wait_timeout(Duration::ZERO).unzip();
+        let (exit_code, timestamp) = i.try_wait().await.unzip();
         let timestamp = timestamp.map(ToTimestamp::to_timestamp);
 
         let status = if pid.is_none() {
@@ -314,7 +316,7 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
         })
     }
 
-    fn task_stats(&self, req: StatsRequest) -> Result<StatsResponse> {
+    async fn task_stats(&self, req: StatsRequest) -> Result<StatsResponse> {
         let i = self.get_instance(req.id())?;
         let pid = i
             .pid()
@@ -329,6 +331,7 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
     }
 }
 
+/*
 impl<T: Instance + Sync + Send> SandboxService for Local<T, RemoteEventSender> {
     type Instance = T;
     fn new(
@@ -343,34 +346,40 @@ impl<T: Instance + Sync + Send> SandboxService for Local<T, RemoteEventSender> {
         Local::<T>::new(engine, events, exit, namespace, containerd_address)
     }
 }
+*/
 
+#[async_trait]
 impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {
-    fn create(&self, _: &TtrpcContext, req: CreateTaskRequest) -> TtrpcResult<CreateTaskResponse> {
+    async fn create(
+        &self,
+        _: &TtrpcContext,
+        req: CreateTaskRequest,
+    ) -> TtrpcResult<CreateTaskResponse> {
         debug!("create: {:?}", req);
-        Ok(self.task_create(req)?)
+        Ok(self.task_create(req).await?)
     }
 
-    fn start(&self, _: &TtrpcContext, req: StartRequest) -> TtrpcResult<StartResponse> {
+    async fn start(&self, _: &TtrpcContext, req: StartRequest) -> TtrpcResult<StartResponse> {
         debug!("start: {:?}", req);
-        Ok(self.task_start(req)?)
+        Ok(self.task_start(req).await?)
     }
 
-    fn kill(&self, _: &TtrpcContext, req: KillRequest) -> TtrpcResult<Empty> {
+    async fn kill(&self, _: &TtrpcContext, req: KillRequest) -> TtrpcResult<Empty> {
         debug!("kill: {:?}", req);
-        Ok(self.task_kill(req)?)
+        Ok(self.task_kill(req).await?)
     }
 
-    fn delete(&self, _: &TtrpcContext, req: DeleteRequest) -> TtrpcResult<DeleteResponse> {
+    async fn delete(&self, _: &TtrpcContext, req: DeleteRequest) -> TtrpcResult<DeleteResponse> {
         debug!("delete: {:?}", req);
-        Ok(self.task_delete(req)?)
+        Ok(self.task_delete(req).await?)
     }
 
-    fn wait(&self, _: &TtrpcContext, req: WaitRequest) -> TtrpcResult<WaitResponse> {
+    async fn wait(&self, _: &TtrpcContext, req: WaitRequest) -> TtrpcResult<WaitResponse> {
         debug!("wait: {:?}", req);
-        Ok(self.task_wait(req)?)
+        Ok(self.task_wait(req).await?)
     }
 
-    fn connect(&self, _: &TtrpcContext, req: ConnectRequest) -> TtrpcResult<ConnectResponse> {
+    async fn connect(&self, _: &TtrpcContext, req: ConnectRequest) -> TtrpcResult<ConnectResponse> {
         debug!("connect: {:?}", req);
         let i = self.get_instance(req.id())?;
         let shim_pid = std::process::id();
@@ -382,12 +391,12 @@ impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {
         })
     }
 
-    fn state(&self, _: &TtrpcContext, req: StateRequest) -> TtrpcResult<StateResponse> {
+    async fn state(&self, _: &TtrpcContext, req: StateRequest) -> TtrpcResult<StateResponse> {
         debug!("state: {:?}", req);
-        Ok(self.task_state(req)?)
+        Ok(self.task_state(req).await?)
     }
 
-    fn shutdown(&self, _: &TtrpcContext, _: ShutdownRequest) -> TtrpcResult<Empty> {
+    async fn shutdown(&self, _: &TtrpcContext, _: ShutdownRequest) -> TtrpcResult<Empty> {
         debug!("shutdown");
         if self.is_empty() {
             self.exit.signal();
@@ -395,8 +404,8 @@ impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {
         Ok(Empty::new())
     }
 
-    fn stats(&self, _ctx: &TtrpcContext, req: StatsRequest) -> TtrpcResult<StatsResponse> {
+    async fn stats(&self, _ctx: &TtrpcContext, req: StatsRequest) -> TtrpcResult<StatsResponse> {
         log::info!("stats: {:?}", req);
-        Ok(self.task_stats(req)?)
+        Ok(self.task_stats(req).await?)
     }
 }

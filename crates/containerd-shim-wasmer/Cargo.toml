@@ -9,9 +9,9 @@ containerd-shim = { workspace = true }
 containerd-shim-wasm = { workspace = true }
 log = { workspace = true }
 oci-spec = { workspace = true, features = ["runtime"] }
+tokio = { workspace = true }
 ttrpc = { workspace = true }
 
-tokio = "1.37.0"
 wasmer = { version = "4.1.2" }
 wasmer-compiler = { version = "4.1.2", features = ["compiler"] }
 wasmer-wasix = { version = "0.12.0" }

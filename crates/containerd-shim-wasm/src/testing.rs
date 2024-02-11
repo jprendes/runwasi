@@ -10,6 +10,7 @@ use anyhow::{bail, Result};
 pub use containerd_shim_wasm_test_modules as modules;
 use oci_spec::runtime::{ProcessBuilder, RootBuilder, SpecBuilder};
 
+pub use crate::sandbox::utils::WithTimeout;
 use crate::sandbox::{Instance, InstanceConfig};
 use crate::sys::signals::SIGKILL;
 
@@ -151,7 +152,7 @@ where
         ))
     }
 
-    pub fn build(self) -> Result<WasiTest<WasiInstance>> {
+    pub async fn build(self) -> Result<WasiTest<WasiInstance>> {
         let tempdir = self.tempdir;
         let dir = tempdir.path();
 
@@ -167,7 +168,7 @@ where
             .set_stderr(dir.join("stderr"))
             .set_stdin(dir.join("stdin"));
 
-        let instance = WasiInstance::new(self.container_name, Some(&cfg))?;
+        let instance = WasiInstance::new(self.container_name, Some(&cfg)).await?;
         Ok(WasiTest { instance, tempdir })
     }
 }
@@ -184,35 +185,41 @@ where
         &self.instance
     }
 
-    pub fn start(&self) -> Result<&Self> {
+    pub async fn start(&self) -> Result<&Self> {
         log::info!("starting wasi test");
-        self.instance.start()?;
+        self.instance.start().await?;
         Ok(self)
     }
 
-    pub fn delete(&self) -> Result<&Self> {
+    pub async fn delete(&self) -> Result<&Self> {
         log::info!("deleting wasi test");
-        self.instance.delete()?;
+        self.instance.delete().await?;
         Ok(self)
     }
 
-    pub fn wait(&self, timeout: Duration) -> Result<(u32, String, String)> {
+    pub async fn wait(&self, timeout: Duration) -> Result<(u32, String, String)> {
         let dir = self.tempdir.path();
 
         log::info!("waiting wasi test");
-        let (status, _) = match self.instance.wait_timeout(timeout) {
+        log::info!("WasiTest::wait(A)");
+        let (status, _) = match self.instance.wait().with_timeout(timeout).await {
             Some(res) => res,
             None => {
-                self.instance.kill(SIGKILL as u32)?;
+                log::info!("WasiTest::wait(B)");
+                self.instance.kill(SIGKILL as u32).await?;
+                log::info!("WasiTest::wait(C)");
                 bail!("timeout while waiting for module to finish");
             }
         };
+        log::info!("WasiTest::wait(D)");
 
         let stdout = read_to_string(dir.join("stdout"))?;
         let stderr = read_to_string(dir.join("stderr"))?;
 
-        self.instance.delete()?;
+        log::info!("WasiTest::wait(E)");
+        self.instance.delete().await?;
 
+        log::info!("WasiTest::wait(F)");
         log::info!("wasi test status is {status}");
 
         Ok((status, stdout, stderr))

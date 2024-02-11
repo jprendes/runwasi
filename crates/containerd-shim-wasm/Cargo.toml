@@ -12,9 +12,10 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
+async-trait = "0.1.77"
 anyhow = { workspace = true }
 chrono = { workspace = true }
-containerd-shim = { workspace = true }
+containerd-shim = { workspace = true, features = ["async"] }
 containerd-shim-wasm-test-modules = { workspace = true, optional = true }
 oci-tar-builder = { workspace = true, optional = true }
 crossbeam = { workspace = true }
@@ -30,9 +31,10 @@ tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 ttrpc = { workspace = true }
 wat = { workspace = true }
-tokio = { version = "1.37.0", features = [ "full" ] }
+tokio = { workspace = true, features = [ "full" ] }
 futures = { version = "0.3.30" }
 wasmparser = "0.204.0"
+time = { version = "0.3.29", features = ["formatting"] }
 tokio-stream = { version = "0.1" }
 prost-types = "0.12" # should match version in containerd-shim
 sha256 = { workspace = true }

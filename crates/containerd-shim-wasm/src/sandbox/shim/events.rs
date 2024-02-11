@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::{DateTime, TimeZone};
 use containerd_shim::event::Event;
 use containerd_shim::publisher::RemotePublisher;
 use log::warn;
 use protobuf::well_known_types::timestamp::Timestamp;
 
+#[async_trait]
 pub trait EventSender: Clone + Send + Sync + 'static {
-    fn send(&self, event: impl Event);
+    async fn send(&self, event: impl Event);
 }
 
 #[derive(Clone)]
@@ -32,13 +34,15 @@ impl RemoteEventSender {
     }
 }
 
+#[async_trait]
 impl EventSender for RemoteEventSender {
-    fn send(&self, event: impl Event) {
+    async fn send(&self, event: impl Event) {
         let topic = event.topic();
         let event = Box::new(event);
         let publisher = &self.inner.publisher;
-        if let Err(err) =
-            publisher.publish(Default::default(), &topic, &self.inner.namespace, event)
+        if let Err(err) = publisher
+            .publish(Default::default(), &topic, &self.inner.namespace, event)
+            .await
         {
             warn!("failed to publish event, topic: {}: {}", &topic, err)
         }

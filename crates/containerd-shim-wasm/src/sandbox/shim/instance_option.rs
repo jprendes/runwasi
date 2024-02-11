@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
 
 use crate::sandbox::instance::Nop;
@@ -13,36 +11,43 @@ pub(super) enum InstanceOption<I: Instance> {
 impl<I: Instance> Instance for InstanceOption<I> {
     type Engine = ();
 
-    fn new(_id: String, _cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self> {
+    async fn new(_id: String, _cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self> {
         // this is never called
         unimplemented!();
     }
 
-    fn start(&self) -> Result<u32> {
+    async fn start(&self) -> Result<u32> {
         match self {
-            Self::Instance(i) => i.start(),
-            Self::Nop(i) => i.start(),
+            Self::Instance(i) => i.start().await,
+            Self::Nop(i) => i.start().await,
         }
     }
 
-    fn kill(&self, signal: u32) -> Result<()> {
+    async fn kill(&self, signal: u32) -> Result<()> {
         match self {
-            Self::Instance(i) => i.kill(signal),
-            Self::Nop(i) => i.kill(signal),
+            Self::Instance(i) => i.kill(signal).await,
+            Self::Nop(i) => i.kill(signal).await,
         }
     }
 
-    fn delete(&self) -> Result<()> {
+    async fn delete(&self) -> Result<()> {
         match self {
-            Self::Instance(i) => i.delete(),
-            Self::Nop(i) => i.delete(),
+            Self::Instance(i) => i.delete().await,
+            Self::Nop(i) => i.delete().await,
         }
     }
 
-    fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)> {
+    async fn wait(&self) -> (u32, DateTime<Utc>) {
         match self {
-            Self::Instance(i) => i.wait_timeout(t),
-            Self::Nop(i) => i.wait_timeout(t),
+            Self::Instance(i) => i.wait().await,
+            Self::Nop(i) => i.wait().await,
+        }
+    }
+
+    fn try_wait(&self) -> Option<(u32, DateTime<Utc>)> {
+        match self {
+            Self::Instance(i) => i.try_wait(),
+            Self::Nop(i) => i.try_wait(),
         }
     }
 }

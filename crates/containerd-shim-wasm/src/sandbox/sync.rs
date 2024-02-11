@@ -1,5 +1,4 @@
-use std::cell::OnceCell;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A cell where we can wait (with timeout) for
@@ -16,9 +15,8 @@ struct WaitableCellImpl<T> {
     // that would produce ownership problems with returning
     // `&T`. This is because the mutex doesn't know that we
     // won't mutate the OnceCell once it's set.
-    mutex: Mutex<()>,
-    cvar: Condvar,
-    cell: OnceCell<T>,
+    cvar: tokio::sync::Notify,
+    cell: tokio::sync::OnceCell<T>,
 }
 
 // this is safe because access to cell guarded by the mutex
@@ -29,9 +27,8 @@ impl<T> Default for WaitableCell<T> {
     fn default() -> Self {
         Self {
             inner: Arc::new(WaitableCellImpl {
-                mutex: Mutex::new(()),
-                cvar: Condvar::new(),
-                cell: OnceCell::new(),
+                cvar: tokio::sync::Notify::new(),
+                cell: tokio::sync::OnceCell::new(),
             }),
         }
     }
@@ -54,10 +51,14 @@ impl<T> WaitableCell<T> {
     /// This method has no effect if the WaitableCell already has a value.
     pub fn set(&self, val: impl Into<T>) -> Result<(), T> {
         let val = val.into();
-        let _guard = self.inner.mutex.lock().unwrap();
-        let res = self.inner.cell.set(val);
-        self.inner.cvar.notify_all();
-        res
+        match self.inner.cell.set(val) {
+            Ok(()) => {
+                self.inner.cvar.notify_waiters();
+                Ok(())
+            }
+            Err(tokio::sync::SetError::AlreadyInitializedError(val)) => Err(val),
+            Err(tokio::sync::SetError::InitializingError(val)) => Err(val),
+        }
     }
 
     /// If the `WaitableCell` is empty when this guard is dropped, the cell will be set to result of `f`.
@@ -88,29 +89,27 @@ impl<T> WaitableCell<T> {
     }
 
     /// Wait for the WaitableCell to be set a value.
-    pub fn wait(&self) -> &T {
-        let value = self.wait_timeout(None);
-        // safe because we waited with timeout `None`
-        unsafe { value.unwrap_unchecked() }
+    pub async fn wait(&self) -> &T {
+        loop {
+            match self.inner.cell.get() {
+                Some(val) => return val,
+                None => self.inner.cvar.notified().await,
+            }
+        }
+    }
+
+    pub fn try_wait(&self) -> Option<&T> {
+        self.inner.cell.get()
     }
 
     /// Wait for the WaitableCell to be set a value, with timeout.
     /// Retuns None if the timeout is reached with no value.
-    pub fn wait_timeout(&self, timeout: impl Into<Option<Duration>>) -> Option<&T> {
-        let timeout = timeout.into();
-        let cvar = &self.inner.cvar;
-        let guard = self.inner.mutex.lock().unwrap();
-        let _guard = match timeout {
-            None => cvar
-                .wait_while(guard, |_| self.inner.cell.get().is_none())
-                .unwrap(),
-            Some(Duration::ZERO) => guard,
-            Some(dur) => cvar
-                .wait_timeout_while(guard, dur, |_| self.inner.cell.get().is_none())
-                .map(|(guard, _)| guard)
-                .unwrap(),
-        };
-        self.inner.cell.get()
+    pub async fn wait_timeout(&self, timeout: Duration) -> Option<&T> {
+        if timeout.is_zero() {
+            self.try_wait()
+        } else {
+            tokio::time::timeout(timeout, self.wait()).await.ok()
+        }
     }
 }
 
@@ -130,95 +129,94 @@ impl<T, R: Into<T>, F: FnOnce() -> R> Drop for WaitableCellSetGuard<T, R, F> {
 
 #[cfg(test)]
 mod test {
-    use std::thread::{sleep, spawn};
     use std::time::Duration;
 
     use super::WaitableCell;
 
-    #[test]
-    fn basic() {
+    #[tokio::test]
+    async fn basic() {
         let cell = WaitableCell::<i32>::new();
         cell.set(42).unwrap();
-        assert_eq!(&42, cell.wait());
+        assert_eq!(&42, cell.wait().await);
     }
 
-    #[test]
-    fn basic_timeout_zero() {
+    #[tokio::test]
+    async fn basic_timeout_zero() {
         let cell = WaitableCell::<i32>::new();
         cell.set(42).unwrap();
-        assert_eq!(Some(&42), cell.wait_timeout(Duration::ZERO));
+        assert_eq!(Some(&42), cell.wait_timeout(Duration::ZERO).await);
     }
 
-    #[test]
-    fn basic_timeout_1ms() {
+    #[tokio::test]
+    async fn basic_timeout_1ms() {
         let cell = WaitableCell::<i32>::new();
         cell.set(42).unwrap();
-        assert_eq!(Some(&42), cell.wait_timeout(Duration::from_secs(1)));
+        assert_eq!(Some(&42), cell.wait_timeout(Duration::from_secs(1)).await);
     }
 
-    #[test]
-    fn basic_timeout_none() {
+    #[tokio::test]
+    async fn basic_timeout_none() {
         let cell = WaitableCell::<i32>::new();
         cell.set(42).unwrap();
-        assert_eq!(Some(&42), cell.wait_timeout(None));
+        assert_eq!(&42, cell.wait().await);
     }
 
-    #[test]
-    fn unset_timeout_zero() {
+    #[tokio::test]
+    async fn unset_timeout_zero() {
         let cell = WaitableCell::<i32>::new();
-        assert_eq!(None, cell.wait_timeout(Duration::ZERO));
+        assert_eq!(None, cell.wait_timeout(Duration::ZERO).await);
     }
 
-    #[test]
-    fn unset_timeout_1ms() {
+    #[tokio::test]
+    async fn unset_timeout_1ms() {
         let cell = WaitableCell::<i32>::new();
-        assert_eq!(None, cell.wait_timeout(Duration::from_millis(1)));
+        assert_eq!(None, cell.wait_timeout(Duration::from_millis(1)).await);
     }
 
-    #[test]
-    fn clone() {
+    #[tokio::test]
+    async fn clone() {
         let cell = WaitableCell::<i32>::new();
         let cloned = cell.clone();
         let _ = cloned.set(42);
-        assert_eq!(&42, cell.wait());
+        assert_eq!(&42, cell.wait().await);
     }
 
-    #[test]
-    fn basic_threaded() {
+    #[tokio::test]
+    async fn basic_threaded() {
         let cell = WaitableCell::<i32>::new();
         {
             let cell = cell.clone();
-            spawn(move || {
-                sleep(Duration::from_millis(1));
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(1)).await;
                 let _ = cell.set(42);
             });
         }
-        assert_eq!(&42, cell.wait());
+        assert_eq!(&42, cell.wait().await);
     }
 
-    #[test]
-    fn basic_double_set() {
+    #[tokio::test]
+    async fn basic_double_set() {
         let cell = WaitableCell::<i32>::new();
         assert_eq!(Ok(()), cell.set(42));
         assert_eq!(Err(24), cell.set(24));
     }
 
-    #[test]
-    fn guard() {
+    #[tokio::test]
+    async fn guard() {
         let cell = WaitableCell::<i32>::new();
         {
             let _guard = cell.set_guard_with(|| 42);
         }
-        assert_eq!(&42, cell.wait());
+        assert_eq!(&42, cell.wait().await);
     }
 
-    #[test]
-    fn guard_no_op() {
+    #[tokio::test]
+    async fn guard_no_op() {
         let cell = WaitableCell::<i32>::new();
         {
             let _guard = cell.set_guard_with(|| 42);
             let _ = cell.set(24);
         }
-        assert_eq!(&24, cell.wait());
+        assert_eq!(&24, cell.wait().await);
     }
 }

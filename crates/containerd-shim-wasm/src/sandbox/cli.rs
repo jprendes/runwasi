@@ -1,14 +1,15 @@
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
-use std::sync::Arc;
 
+//use std::sync::mpsc::channel;
+//use std::sync::Arc;
 use containerd_shim::{parse, run, Config};
-use ttrpc::Server;
 
-use crate::sandbox::manager::Shim;
-use crate::sandbox::shim::Local;
-use crate::sandbox::{Instance, ManagerService, ShimCli};
-use crate::services::sandbox_ttrpc::{create_manager, Manager};
+//use ttrpc::Server;
+
+//use crate::sandbox::manager::Shim;
+//use crate::sandbox::shim::Local;
+use crate::sandbox::{Instance, /*ManagerService,*/ ShimCli};
+//use crate::services::sandbox_ttrpc::{create_manager, Manager};
 
 pub mod r#impl {
     pub use git_version::git_version;
@@ -63,11 +64,19 @@ pub fn shim_main<'a, I>(
     let shim_version = shim_version.into().unwrap_or("v1");
 
     let lower_name = name.to_lowercase();
-    let shim_cli = format!("containerd-shim-{lower_name}-{shim_version}");
-    let shim_client = format!("containerd-shim-{lower_name}d-{shim_version}");
-    let shim_daemon = format!("containerd-{lower_name}d");
+    //let shim_cli = format!("containerd-shim-{lower_name}-{shim_version}");
+    //let shim_client = format!("containerd-shim-{lower_name}d-{shim_version}");
+    //let shim_daemon = format!("containerd-{lower_name}d");
     let shim_id = format!("io.containerd.{lower_name}.{shim_version}");
 
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_keep_alive(std::time::Duration::ZERO)
+        .build()
+        .unwrap()
+        .block_on(run::<ShimCli<I>>(&shim_id, config))
+
+    /*
     match argv0.to_lowercase() {
         s if s == shim_cli => {
             run::<ShimCli<I>>(&shim_id, config);
@@ -96,4 +105,5 @@ pub fn shim_main<'a, I>(
             std::process::exit(1);
         }
     }
+    */
 }

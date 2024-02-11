@@ -28,30 +28,29 @@ pub(crate) struct LeaseGuard {
 // Provides a best effort for dropping a lease of the content.  If the lease cannot be dropped, it will log a warning
 impl Drop for LeaseGuard {
     fn drop(&mut self) {
-        let id = self.lease_id.clone();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let lease_id = self.lease_id.clone();
+        let address = self.address.clone();
+        let namespace = self.namespace.clone();
 
-        let client = rt.block_on(containerd_client::connect(self.address.clone()));
+        tokio::spawn(async move {
+            let id = lease_id;
+            let client = containerd_client::connect(address).await;
 
-        let channel = match client {
-            Ok(channel) => channel,
-            Err(e) => {
-                log::error!(
-                    "failed to connect to containerd: {}. lease may not be deleted",
-                    e
-                );
-                return;
-            }
-        };
+            let channel = match client {
+                Ok(channel) => channel,
+                Err(e) => {
+                    log::error!(
+                        "failed to connect to containerd: {}. lease may not be deleted",
+                        e
+                    );
+                    return;
+                }
+            };
 
-        let mut client = LeasesClient::new(channel);
+            let mut client = LeasesClient::new(channel);
 
-        rt.block_on(async {
             let req = containerd_client::services::v1::DeleteRequest { id, sync: false };
-            let req = with_namespace!(req, self.namespace);
+            let req = with_namespace!(req, namespace);
             let result = client.delete(req).await;
 
             match result {
