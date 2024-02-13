@@ -10,4 +10,4 @@ mod local;
 mod task_state;
 
 pub use cli::Cli;
-//pub(crate) use local::Local;
+pub(crate) use local::Local;

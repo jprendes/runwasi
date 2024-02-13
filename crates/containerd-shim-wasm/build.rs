@@ -1,7 +1,7 @@
 use std::env::var_os;
 use std::path::Path;
 
-use ttrpc_codegen::{Codegen, ProtobufCustomize};
+use ttrpc_codegen::{Codegen, Customize, ProtobufCustomize};
 
 fn main() {
     let protos = ["protos/sandbox.proto"];
@@ -14,6 +14,10 @@ fn main() {
         .out_dir(out_dir)
         .inputs(protos)
         .include("protos")
+        .customize(Customize {
+            async_all: true,
+            ..Default::default()
+        })
         .rust_protobuf()
         .rust_protobuf_customize(ProtobufCustomize::default().gen_mod_rs(false))
         .run()

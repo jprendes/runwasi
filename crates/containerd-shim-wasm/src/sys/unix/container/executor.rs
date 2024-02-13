@@ -1,8 +1,8 @@
-use std::cell::OnceCell;
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use libcontainer::workload::default::DefaultExecutor;
@@ -23,11 +23,18 @@ enum InnerExecutor {
     CantHandle,
 }
 
+macro_rules! run_in_new_thread {
+    // Run code in a new thread so that runtimes that use tokio can do so.
+    ($expression:expr) => {
+        std::thread::scope(move |s| s.spawn(move || $expression).join().unwrap())
+    };
+}
+
 #[derive(Clone)]
 pub(crate) struct Executor<E: Engine> {
     engine: E,
     stdio: Stdio,
-    inner: OnceCell<InnerExecutor>,
+    inner: OnceLock<InnerExecutor>,
     wasm_layers: Vec<WasmLayer>,
     platform: Platform,
 }
@@ -53,17 +60,7 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
             }
             InnerExecutor::Wasm => {
                 log::info!("calling start function");
-                let engine = &self.engine;
-                let stdio = self.stdio.take();
-                let ctx = self.ctx(spec);
-                let status = std::thread::scope(move |s| {
-                    // Run run_wasi in a new thread so that runtimes that
-                    // use tokio can do so.
-                    s.spawn(move || engine.run_wasi(&ctx, stdio))
-                        .join()
-                        .unwrap()
-                });
-                match status {
+                match run_in_new_thread!(self.engine.run_wasi(&self.ctx(spec), self.stdio.take())) {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
                         log::info!("error running start function: {err}");
@@ -98,9 +95,10 @@ impl<E: Engine> Executor<E> {
 
     fn inner(&self, spec: &Spec) -> &InnerExecutor {
         self.inner.get_or_init(|| {
-            if is_linux_container(&self.ctx(spec)).is_ok() {
+            let ctx = self.ctx(spec);
+            if is_linux_container(&ctx).is_ok() {
                 InnerExecutor::Linux
-            } else if self.engine.can_handle(&self.ctx(spec)).is_ok() {
+            } else if run_in_new_thread! { self.engine.can_handle(&ctx).is_ok() } {
                 InnerExecutor::Wasm
             } else {
                 InnerExecutor::CantHandle

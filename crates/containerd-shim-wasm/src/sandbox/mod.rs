@@ -6,7 +6,7 @@ pub mod cli;
 pub mod error;
 pub mod instance;
 pub mod instance_utils;
-//pub mod manager;
+pub mod manager;
 pub mod shim;
 pub mod stdio;
 pub mod sync;
@@ -14,7 +14,7 @@ pub mod utils;
 
 pub use error::{Error, Result};
 pub use instance::{Instance, InstanceConfig};
-//pub use manager::{Sandbox as SandboxService, Service as ManagerService};
+pub use manager::{Sandbox as SandboxService, Service as ManagerService};
 pub use shim::Cli as ShimCli;
 pub use stdio::Stdio;
 

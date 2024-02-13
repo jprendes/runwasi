@@ -1,15 +1,15 @@
+use std::fs::{create_dir_all, remove_file};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-//use std::sync::mpsc::channel;
-//use std::sync::Arc;
 use containerd_shim::{parse, run, Config};
+use tokio::signal::unix::{signal, SignalKind};
+use ttrpc::asynchronous::Server;
 
-//use ttrpc::Server;
-
-//use crate::sandbox::manager::Shim;
-//use crate::sandbox::shim::Local;
-use crate::sandbox::{Instance, /*ManagerService,*/ ShimCli};
-//use crate::services::sandbox_ttrpc::{create_manager, Manager};
+use crate::sandbox::manager::Shim;
+use crate::sandbox::shim::Local;
+use crate::sandbox::{Instance, ManagerService, ShimCli};
+use crate::services::sandbox_ttrpc::{create_manager, Manager};
 
 pub mod r#impl {
     pub use git_version::git_version;
@@ -47,63 +47,68 @@ pub fn shim_main<'a, I>(
     I: 'static + Instance + Sync + Send,
     I::Engine: Default,
 {
-    let os_args: Vec<_> = std::env::args_os().collect();
-    let flags = parse(&os_args[1..]).unwrap();
-    let argv0 = PathBuf::from(&os_args[0]);
-    let argv0 = argv0.file_stem().unwrap_or_default().to_string_lossy();
-
-    if flags.version {
-        println!("{argv0}:");
-        println!("  Runtime: {name}");
-        println!("  Version: {version}");
-        println!("  Revision: {}", revision.into().unwrap_or("<none>"));
-        println!();
-
-        std::process::exit(0);
-    }
-    let shim_version = shim_version.into().unwrap_or("v1");
-
-    let lower_name = name.to_lowercase();
-    //let shim_cli = format!("containerd-shim-{lower_name}-{shim_version}");
-    //let shim_client = format!("containerd-shim-{lower_name}d-{shim_version}");
-    //let shim_daemon = format!("containerd-{lower_name}d");
-    let shim_id = format!("io.containerd.{lower_name}.{shim_version}");
-
     tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .thread_keep_alive(std::time::Duration::ZERO)
-        .build()
-        .unwrap()
-        .block_on(run::<ShimCli<I>>(&shim_id, config))
+    .enable_all()
+    .thread_keep_alive(std::time::Duration::ZERO)
+    .build()
+    .unwrap()
+    .block_on(async {
+        let os_args: Vec<_> = std::env::args_os().collect();
+        let flags = parse(&os_args[1..]).unwrap();
+        let argv0 = PathBuf::from(&os_args[0]);
+        let argv0 = argv0.file_stem().unwrap_or_default().to_string_lossy();
 
-    /*
-    match argv0.to_lowercase() {
-        s if s == shim_cli => {
-            run::<ShimCli<I>>(&shim_id, config);
-        }
-        s if s == shim_client => {
-            run::<Shim>(&shim_client, config);
-        }
-        s if s == shim_daemon => {
-            log::info!("starting up!");
-            let s: ManagerService<Local<I>> = Default::default();
-            let s = Arc::new(Box::new(s) as Box<dyn Manager + Send + Sync>);
-            let service = create_manager(s);
+        if flags.version {
+            println!("{argv0}:");
+            println!("  Runtime: {name}");
+            println!("  Version: {version}");
+            println!("  Revision: {}", revision.into().unwrap_or("<none>"));
+            println!();
 
-            let mut server = Server::new()
-                .bind("unix:///run/io.containerd.wasmwasi.v1/manager.sock")
-                .expect("failed to bind to socket")
-                .register_service(service);
+            std::process::exit(0);
+        }
+        let shim_version = shim_version.into().unwrap_or("v1");
 
-            server.start().expect("failed to start daemon");
-            log::info!("server started!");
-            let (_tx, rx) = channel::<()>();
-            rx.recv().unwrap();
+        let lower_name = name.to_lowercase();
+        let shim_cli = format!("containerd-shim-{lower_name}-{shim_version}");
+        let shim_client = format!("containerd-shim-{lower_name}d-{shim_version}");
+        let shim_daemon = format!("containerd-{lower_name}d");
+        let shim_id = format!("io.containerd.{lower_name}.{shim_version}");
+
+        match argv0.to_lowercase() {
+            s if s == shim_cli => {
+                run::<ShimCli<I>>(&shim_id, config).await;
+            }
+            s if s == shim_client => {
+                run::<Shim>(&shim_client, config).await;
+            }
+            s if s == shim_daemon => {
+                eprintln!("starting up!");
+                let s: ManagerService<Local<I>> = Default::default();
+                let s = Arc::new(Box::new(s) as Box<dyn Manager + Send + Sync>);
+                let service = create_manager(s);
+
+                remove_file("/run/io.containerd.wasmwasi.v1/manager.sock").unwrap();
+                create_dir_all("/run/io.containerd.wasmwasi.v1/").unwrap();
+                let mut server = Server::new()
+                    .bind("unix:///run/io.containerd.wasmwasi.v1/manager.sock")
+                    .expect("failed to bind to socket")
+                    .register_service(service);
+
+                let mut interrupt = signal(SignalKind::interrupt()).unwrap();
+                server.start().await.expect("failed to start daemon");
+
+                eprintln!("server started!");
+                eprintln!("press Ctrl+C to shutdown.");
+                interrupt.recv().await;
+                eprintln!("graceful shutdown");
+
+                server.shutdown().await.unwrap();
+            }
+            _ => {
+                eprintln!("error: unrecognized binary name, expected one of {shim_cli}, {shim_client}, or {shim_daemon}.");
+                std::process::exit(1);
+            }
         }
-        _ => {
-            eprintln!("error: unrecognized binary name, expected one of {shim_cli}, {shim_client}, or {shim_daemon}.");
-            std::process::exit(1);
-        }
-    }
-    */
+    });
 }

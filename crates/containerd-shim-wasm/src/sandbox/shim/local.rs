@@ -14,7 +14,7 @@ use containerd_shim::error::Error as ShimError;
 use containerd_shim::protos::events::task::{TaskCreate, TaskDelete, TaskExit, TaskIO, TaskStart};
 use containerd_shim::protos::shim_async::Task;
 use containerd_shim::protos::types::task::Status;
-//use containerd_shim::publisher::RemotePublisher;
+use containerd_shim::publisher::RemotePublisher;
 use containerd_shim::util::IntoOption;
 use containerd_shim::{DeleteResponse, ExitSignal, TtrpcContext, TtrpcResult};
 use log::debug;
@@ -23,7 +23,7 @@ use oci_spec::runtime::Spec;
 use crate::sandbox::instance::{Instance, InstanceConfig};
 use crate::sandbox::shim::events::{EventSender, RemoteEventSender, ToTimestamp};
 use crate::sandbox::shim::instance_data::InstanceData;
-use crate::sandbox::{oci, Error, Result /*, SandboxService*/};
+use crate::sandbox::{oci, Error, Result, SandboxService};
 use crate::sys::metrics::get_metrics;
 
 #[cfg(test)]
@@ -331,7 +331,6 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
     }
 }
 
-/*
 impl<T: Instance + Sync + Send> SandboxService for Local<T, RemoteEventSender> {
     type Instance = T;
     fn new(
@@ -346,7 +345,6 @@ impl<T: Instance + Sync + Send> SandboxService for Local<T, RemoteEventSender> {
         Local::<T>::new(engine, events, exit, namespace, containerd_address)
     }
 }
-*/
 
 #[async_trait]
 impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {

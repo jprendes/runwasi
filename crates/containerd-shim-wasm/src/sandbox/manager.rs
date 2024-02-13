@@ -4,26 +4,24 @@
 
 use std::collections::HashMap;
 use std::env::current_dir;
-use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::thread;
+use std::sync::Arc;
 
-use anyhow::Context;
+use async_trait::async_trait;
 use containerd_shim::error::Error as ShimError;
-use containerd_shim::protos::shim::shim_ttrpc::{create_task, Task};
-use containerd_shim::protos::ttrpc::{Client, Server};
-use containerd_shim::protos::TaskClient;
 use containerd_shim::publisher::RemotePublisher;
-use containerd_shim::{self as shim, api, TtrpcContext, TtrpcResult};
-use oci_spec::runtime::{self, Spec};
+use containerd_shim::{self as shim, api, Task, TtrpcContext, TtrpcResult};
+use oci_spec::runtime::Spec;
+use shim::protos::shim_async::{create_task, TaskClient};
+use shim::util::write_str_to_file;
 use shim::Flags;
+use tokio::sync::RwLock;
+use ttrpc::asynchronous::{Client, Server};
 use ttrpc::context;
 
 use super::error::Error;
 use super::instance::Instance;
-use super::sandbox;
+use crate::services::sandbox;
 use crate::services::sandbox_ttrpc::{Manager, ManagerClient};
-use crate::sys::networking::setup_namespaces;
 
 /// Sandbox wraps an Instance and is used with the `Service` to manage multiple instances.
 pub trait Sandbox: Task + Send + Sync {
@@ -64,13 +62,14 @@ where
     }
 }
 
+#[async_trait]
 impl<T: Sandbox + 'static> Manager for Service<T> {
-    fn create(
+    async fn create(
         &self,
         _ctx: &TtrpcContext,
         req: sandbox::CreateRequest,
     ) -> TtrpcResult<sandbox::CreateResponse> {
-        let mut sandboxes = self.sandboxes.write().unwrap();
+        let mut sandboxes = self.sandboxes.write().await;
 
         if sandboxes.contains_key(&req.id) {
             return Err(Error::AlreadyExists(req.id).into());
@@ -78,7 +77,7 @@ impl<T: Sandbox + 'static> Manager for Service<T> {
 
         let sock = format!("unix://{}/shim.sock", &req.working_directory);
 
-        let publisher = RemotePublisher::new(req.ttrpc_address)?;
+        let publisher = RemotePublisher::new(req.ttrpc_address).await?;
 
         let sb = T::new(
             req.namespace.clone(),
@@ -92,42 +91,22 @@ impl<T: Sandbox + 'static> Manager for Service<T> {
 
         sandboxes.insert(req.id.clone(), sock.clone());
 
-        let cfg = Spec::load(
-            Path::new(&req.working_directory)
-                .join("config.json")
-                .to_str()
-                .unwrap(),
-        )
-        .map_err(|err| Error::InvalidArgument(format!("could not load runtime spec: {}", err)))?;
+        // TODO: why did we need setup_namespaces here?
+        // setup_namespaces(&cfg)?;
+        server.start().await?;
 
-        let (tx, rx) = std::sync::mpsc::channel::<Result<(), Error>>();
-
-        let id = &req.id;
-
-        let _ = thread::Builder::new()
-            .name(format!("{}-sandbox-create", id))
-            .spawn(move || {
-                let r = start_sandbox(cfg, &mut server);
-                tx.send(r).context("could not send sandbox result").unwrap();
-            })
-            .context("failed to spawn sandbox thread")
-            .map_err(Error::from)?;
-
-        rx.recv()
-            .context("could not receive sandbox result")
-            .map_err(Error::from)??;
         Ok(sandbox::CreateResponse {
             socket_path: sock,
             ..Default::default()
         })
     }
 
-    fn delete(
+    async fn delete(
         &self,
         _ctx: &TtrpcContext,
         req: sandbox::DeleteRequest,
     ) -> TtrpcResult<sandbox::DeleteResponse> {
-        let mut sandboxes = self.sandboxes.write().unwrap();
+        let mut sandboxes = self.sandboxes.write().await;
         if !sandboxes.contains_key(&req.id) {
             return Err(Error::NotFound(req.id).into());
         }
@@ -142,19 +121,11 @@ impl<T: Sandbox + 'static> Manager for Service<T> {
                 now: true,
                 ..Default::default()
             },
-        )?;
+        )
+        .await?;
 
         Ok(sandbox::DeleteResponse::default())
     }
-}
-
-// Note that this changes the current thread's state.
-// You probably want to run this in a new thread.
-fn start_sandbox(cfg: runtime::Spec, server: &mut Server) -> Result<(), Error> {
-    setup_namespaces(&cfg)?;
-
-    server.start_listen().context("could not start listener")?;
-    Ok(())
 }
 
 /// Shim implements the containerd-shim CLI for connecting to a Manager service.
@@ -165,17 +136,18 @@ pub struct Shim {
 
 impl Task for Shim {}
 
+#[async_trait]
 impl shim::Shim for Shim {
     type T = Self;
 
-    fn new(_runtime_id: &str, args: &Flags, _config: &mut shim::Config) -> Self {
+    async fn new(_runtime_id: &str, args: &Flags, _config: &mut shim::Config) -> Self {
         Shim {
             id: args.id.to_string(),
             namespace: args.namespace.to_string(),
         }
     }
 
-    fn start_shim(&mut self, opts: containerd_shim::StartOpts) -> shim::Result<String> {
+    async fn start_shim(&mut self, opts: containerd_shim::StartOpts) -> shim::Result<String> {
         let dir = current_dir().map_err(|err| ShimError::Other(err.to_string()))?;
         let spec = Spec::load(dir.join("config.json").to_str().unwrap()).map_err(|err| {
             shim::Error::InvalidArgument(format!("error loading runtime spec: {}", err))
@@ -192,43 +164,48 @@ impl shim::Shim for Shim {
         let client = Client::connect("unix:///run/io.containerd.wasmwasi.v1/manager.sock")?;
         let mc = ManagerClient::new(client);
 
-        let addr = match mc.create(
-            context::Context::default(),
-            &sandbox::CreateRequest {
-                id: sandbox.clone(),
-                working_directory: dir.as_path().to_str().unwrap().to_string(),
-                ttrpc_address: opts.ttrpc_address.clone(),
-                ..Default::default()
-            },
-        ) {
+        let addr = match mc
+            .create(
+                context::Context::default(),
+                &sandbox::CreateRequest {
+                    id: sandbox.clone(),
+                    working_directory: dir.as_path().to_str().unwrap().to_string(),
+                    ttrpc_address: opts.ttrpc_address.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
             Ok(res) => res.socket_path,
             Err(_) => {
-                let res = mc.connect(
-                    context::Context::default(),
-                    &sandbox::ConnectRequest {
-                        id: sandbox,
-                        ttrpc_address: opts.ttrpc_address,
-                        ..Default::default()
-                    },
-                )?;
+                let res = mc
+                    .connect(
+                        context::Context::default(),
+                        &sandbox::ConnectRequest {
+                            id: sandbox,
+                            ttrpc_address: opts.ttrpc_address,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
                 res.socket_path
             }
         };
 
-        shim::util::write_address(&addr)?;
+        write_str_to_file("address", &addr).await?;
 
         Ok(addr)
     }
 
-    fn wait(&mut self) {
+    async fn wait(&mut self) {
         todo!()
     }
 
-    fn create_task_service(&self, _publisher: RemotePublisher) -> Self::T {
+    async fn create_task_service(&self, _publisher: RemotePublisher) -> Self::T {
         todo!() // but not really, haha
     }
 
-    fn delete_shim(&mut self) -> shim::Result<api::DeleteResponse> {
+    async fn delete_shim(&mut self) -> shim::Result<api::DeleteResponse> {
         let dir = current_dir().map_err(|err| ShimError::Other(err.to_string()))?;
         let spec = Spec::load(dir.join("config.json").to_str().unwrap()).map_err(|err| {
             shim::Error::InvalidArgument(format!("error loading runtime spec: {}", err))
@@ -254,7 +231,8 @@ impl shim::Shim for Shim {
                 namespace: self.namespace.clone(),
                 ..Default::default()
             },
-        )?;
+        )
+        .await?;
 
         // TODO: write pid, exit code, etc to disk so we can use it here.
         Ok(api::DeleteResponse::default())
