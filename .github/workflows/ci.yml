@@ -17,7 +17,7 @@ jobs:
     name: ${{ matrix.runtime }}
     strategy:
       matrix:
-        os: ["ubuntu-latest", "windows-latest"]
+        os: ["ubuntu-latest"]
         runtime: ["common", "wasmedge", "wasmtime", "wasmer"]
     uses: ./.github/workflows/action-fmt.yml
     with:
@@ -57,20 +57,6 @@ jobs:
       target: "${{ matrix.arch }}-unknown-linux-${{ matrix.libc }}"
       slug: "${{ matrix.arch }}-linux-${{ matrix.libc }}"
       arch: ${{ matrix.arch }}
-
-  build-windows:
-    name: ${{ matrix.runtime }}
-    permissions:
-      id-token: write
-    strategy:
-      matrix:
-        os: ["windows-latest"]
-        runtime: ["common", "wasmtime", "wasmedge", "wasmer"]
-    uses: ./.github/workflows/action-build.yml
-    with:
-      os: ${{ matrix.os }}
-      runtime: ${{ matrix.runtime }}
-      slug: "windows"
 
   smoke-tests:
     name: ${{ matrix.runtime }}
