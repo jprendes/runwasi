@@ -605,8 +605,7 @@ dependencies = [
 [[package]]
 name = "containerd-shim"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ecfe3bbd2e126cbd3b37ebc7faadedeeb5a87a389dc1668f1f0f4d246e46769"
+source = "git+https://github.com/jprendes/rust-extensions.git?rev=fcf6e0a64a2302f88eb24ebc5319d2dc94e30c9c#fcf6e0a64a2302f88eb24ebc5319d2dc94e30c9c"
 dependencies = [
  "async-trait",
  "cgroups-rs",
@@ -630,19 +629,19 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "trapeze",
  "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "containerd-shim-protos"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e4ef8fa542cd6964b2705983d02de4f4bdaaac8d25feabcef5c43a87ac58291"
+source = "git+https://github.com/jprendes/rust-extensions.git?rev=fcf6e0a64a2302f88eb24ebc5319d2dc94e30c9c#fcf6e0a64a2302f88eb24ebc5319d2dc94e30c9c"
 dependencies = [
- "async-trait",
- "protobuf 3.2.0",
- "ttrpc",
- "ttrpc-codegen",
+ "prost 0.12.4",
+ "prost-types 0.12.4",
+ "trapeze",
+ "trapeze-codegen",
 ]
 
 [[package]]
@@ -667,8 +666,8 @@ dependencies = [
  "nix 0.28.0",
  "oci-spec",
  "oci-tar-builder",
+ "prost 0.12.4",
  "prost-types 0.12.4",
- "protobuf 3.2.0",
  "rand",
  "serde",
  "serde_json",
@@ -678,7 +677,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "ttrpc",
+ "trapeze",
  "ttrpc-codegen",
  "wasmparser 0.204.0",
  "wat",
@@ -712,7 +711,6 @@ dependencies = [
  "oci-spec",
  "serial_test",
  "tokio",
- "ttrpc",
  "wasmedge-sdk",
 ]
 
@@ -727,7 +725,6 @@ dependencies = [
  "oci-spec",
  "serial_test",
  "tokio",
- "ttrpc",
  "wasmer",
  "wasmer-compiler",
  "wasmer-wasix",
@@ -745,7 +742,6 @@ dependencies = [
  "serial_test",
  "sha256",
  "tokio",
- "ttrpc",
  "wasi-common",
  "wasmtime",
  "wasmtime-wasi",
@@ -1017,19 +1013,6 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1137cd7e7fc0fb5d3c5a8678be38ec56e819125d8d7907411fe24ccb943faca8"
 dependencies = [
- "crossbeam-channel",
- "crossbeam-deque",
- "crossbeam-epoch",
- "crossbeam-queue",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-channel"
-version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab3db02a9c5b5121e1e42fbdb1aeb65f5e02624cc58c43f2884c6ccac0b82f95"
-dependencies = [
  "crossbeam-utils",
 ]
 
@@ -1048,15 +1031,6 @@ name = "crossbeam-epoch"
 version = "0.9.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-queue"
-version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df0346b5d5e76ac2fe4e327c5fd1118d6be7c51dfb18f9b7922923f287471e35"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2342,24 +2316,6 @@ dependencies = [
 
 [[package]]
 name = "memoffset"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
-name = "memoffset"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
-name = "memoffset"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d61c719bcfbcf5d62b3a09efa6088de8c54bc0bfcd3ea7ae39fcc186108b8de1"
@@ -2456,18 +2412,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.24.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa52e972a9a719cecb6864fb88568781eb706bac2cd1d4f04a648542dbf78069"
-dependencies = [
- "bitflags 1.3.2",
- "cfg-if 1.0.0",
- "libc",
- "memoffset 0.6.5",
-]
-
-[[package]]
-name = "nix"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f346ff70e7dbfd675fe90590b92d59ef2de15a8779ae305ebcbfd3f0caf59be4"
@@ -2476,19 +2420,6 @@ dependencies = [
  "bitflags 1.3.2",
  "cfg-if 1.0.0",
  "libc",
-]
-
-[[package]]
-name = "nix"
-version = "0.26.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "598beaf3cc6fdd9a5dfb1630c2800c7acd31df7aaf0f565796fba2b53ca1af1b"
-dependencies = [
- "bitflags 1.3.2",
- "cfg-if 1.0.0",
- "libc",
- "memoffset 0.7.1",
- "pin-utils",
 ]
 
 [[package]]
@@ -4157,9 +4088,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-vsock"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52a15c15b1bc91f90902347eff163b5b682643aff0c8e972912cca79bd9208dd"
+checksum = "2e336ac4b36df625d5429a735dd5847732fe5f62010e3ce0c50f3705d44730f8"
 dependencies = [
  "bytes",
  "futures",
@@ -4341,31 +4272,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "trapeze"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5c6d03115fec0de8901055051a947971b50e9cac1cbe26ce729b631324a90f2"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "bitflags 2.5.0",
+ "futures",
+ "log",
+ "prost 0.12.4",
+ "prost-types 0.12.4",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-vsock",
+ "trapeze-codegen",
+ "trapeze-macros",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "trapeze-codegen"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "157f0259f19558dcf3cba246498943bd780442dfc3a70272a3ae45df72637eb4"
+dependencies = [
+ "prost-build 0.12.4",
+]
+
+[[package]]
+name = "trapeze-macros"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699a0d45a710603bf5aa72fbe052d2dddecc7d196d650890b2444b36f43123fa"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.60",
+ "tempfile",
+ "trapeze-codegen",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "ttrpc"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ea338db445bee75c596cf8a478fbfcefad5a943c9e92a7e1c805c65ed39551"
-dependencies = [
- "async-trait",
- "byteorder",
- "crossbeam",
- "futures",
- "libc",
- "log",
- "nix 0.26.4",
- "protobuf 3.2.0",
- "protobuf-codegen 3.2.0",
- "thiserror",
- "tokio",
- "tokio-vsock",
- "windows-sys 0.48.0",
-]
 
 [[package]]
 name = "ttrpc-codegen"
@@ -4577,12 +4532,12 @@ dependencies = [
 
 [[package]]
 name = "vsock"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c8e1df0bf1e1b28095c24564d1b90acae64ca69b097ed73896e342fa6649c57"
+checksum = "2dfb6e7a74830912f1f4a7655227c9ded1ea4e9136676311fedf54bedb412f35"
 dependencies = [
  "libc",
- "nix 0.24.3",
+ "nix 0.27.1",
 ]
 
 [[package]]

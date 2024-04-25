@@ -5,7 +5,6 @@ use anyhow::Error as AnyError;
 use containerd_shim::Error as ShimError;
 use oci_spec::OciSpecError;
 use thiserror::Error;
-use ttrpc;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -52,37 +51,61 @@ pub enum Error {
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;
 
-impl From<Error> for ttrpc::Error {
+impl From<Error> for trapeze::Status {
     fn from(e: Error) -> Self {
         match e {
-            Error::Shim(ref s) => match s {
-                ShimError::InvalidArgument(s) => {
-                    ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INVALID_ARGUMENT, s))
-                }
-                ShimError::NotFoundError(s) => {
-                    ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::NOT_FOUND, s))
-                }
-                _ => ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, s)),
+            Error::Shim(s) => match s {
+                ShimError::InvalidArgument(s) => trapeze::Status {
+                    code: trapeze::Code::InvalidArgument.into(),
+                    message: s,
+                    ..Default::default()
+                },
+                ShimError::NotFoundError(s) => trapeze::Status {
+                    code: trapeze::Code::NotFound.into(),
+                    message: s,
+                    ..Default::default()
+                },
+                _ => trapeze::Status {
+                    code: trapeze::Code::Unknown.into(),
+                    message: s.to_string(),
+                    ..Default::default()
+                },
             },
-            Error::NotFound(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::NOT_FOUND, s))
-            }
-            Error::AlreadyExists(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::ALREADY_EXISTS, s))
-            }
-            Error::InvalidArgument(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INVALID_ARGUMENT, s))
-            }
-            Error::FailedPrecondition(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::FAILED_PRECONDITION, s))
-            }
-            Error::Oci(ref _s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, e.to_string()))
-            }
-            Error::Any(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, s))
-            }
-            _ => ttrpc::Error::Others(e.to_string()),
+            Error::NotFound(s) => trapeze::Status {
+                code: trapeze::Code::NotFound.into(),
+                message: s,
+                ..Default::default()
+            },
+            Error::AlreadyExists(s) => trapeze::Status {
+                code: trapeze::Code::AlreadyExists.into(),
+                message: s,
+                ..Default::default()
+            },
+            Error::InvalidArgument(s) => trapeze::Status {
+                code: trapeze::Code::InvalidArgument.into(),
+                message: s,
+                ..Default::default()
+            },
+            Error::FailedPrecondition(s) => trapeze::Status {
+                code: trapeze::Code::FailedPrecondition.into(),
+                message: s,
+                ..Default::default()
+            },
+            Error::Oci(ref _s) => trapeze::Status {
+                code: trapeze::Code::Unknown.into(),
+                message: e.to_string(),
+                ..Default::default()
+            },
+            Error::Any(s) => trapeze::Status {
+                code: trapeze::Code::Unknown.into(),
+                message: s.to_string(),
+                ..Default::default()
+            },
+            _ => trapeze::Status {
+                code: trapeze::Code::Unknown.into(),
+                message: e.to_string(),
+                ..Default::default()
+            },
         }
     }
 }
@@ -102,63 +125,69 @@ mod tests {
     #[test]
     fn test_error_to_ttrpc_status() {
         let e = Error::InvalidArgument("invalid argument".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::INVALID_ARGUMENT);
-                assert_eq!(s.message, "invalid argument");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::InvalidArgument.into(),
+                message: "invalid argument".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
 
         let e = Error::NotFound("not found".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::NOT_FOUND);
-                assert_eq!(s.message, "not found");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::NotFound.into(),
+                message: "not found".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
 
         let e = Error::AlreadyExists("already exists".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::ALREADY_EXISTS);
-                assert_eq!(s.message, "already exists");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::AlreadyExists.into(),
+                message: "already exists".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
 
         let e = Error::FailedPrecondition("failed precondition".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::FAILED_PRECONDITION);
-                assert_eq!(s.message, "failed precondition");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::FailedPrecondition.into(),
+                message: "failed precondition".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
 
         let e = Error::Shim(ShimError::InvalidArgument("invalid argument".to_string()));
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::INVALID_ARGUMENT);
-                assert_eq!(s.message, "invalid argument");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::InvalidArgument.into(),
+                message: "invalid argument".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
 
         let e = Error::Any(AnyError::new(TestError::AnError("any error".to_string())));
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::UNKNOWN);
-                assert_eq!(s.message, "any error");
+        let t: trapeze::Status = e.into();
+        assert_eq!(
+            t,
+            trapeze::Status {
+                code: trapeze::Code::Unknown.into(),
+                message: "any error".into(),
+                ..Default::default()
             }
-            _ => panic!("unexpected error"),
-        }
+        );
     }
 }

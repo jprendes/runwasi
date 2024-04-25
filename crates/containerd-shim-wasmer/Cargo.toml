@@ -10,7 +10,6 @@ containerd-shim-wasm = { workspace = true }
 log = { workspace = true }
 oci-spec = { workspace = true, features = ["runtime"] }
 tokio = { workspace = true }
-ttrpc = { workspace = true }
 
 wasmer = { version = "4.1.2" }
 wasmer-compiler = { version = "4.1.2", features = ["compiler"] }

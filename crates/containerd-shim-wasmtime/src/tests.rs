@@ -63,7 +63,13 @@ async fn test_hello_world_oci() -> anyhow::Result<()> {
         .with_wasm(HELLO_WORLD)?
         .as_oci_image(None, None)?;
 
-    let (exit_code, stdout, _) = builder.build().await?.start().await?.wait(Duration::from_secs(10)).await?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()
+        .await?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -81,7 +87,13 @@ async fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
             Some("c1".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build().await?.start().await?.wait(Duration::from_secs(10)).await?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()
+        .await?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -101,7 +113,13 @@ async fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
             Some("c2".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build().await?.start().await?.wait(Duration::from_secs(10)).await?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()
+        .await?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -119,7 +137,13 @@ async fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow:
             Some("c1".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build().await?.start().await?.wait(Duration::from_secs(10)).await?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()
+        .await?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -141,7 +165,13 @@ async fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow:
             Some("c2".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build().await?.start().await?.wait(Duration::from_secs(10)).await?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()
+        .await?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");

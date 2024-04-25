@@ -5,7 +5,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use containerd_shim::api::Status;
 use containerd_shim::event::Event;
-use protobuf::MessageDyn;
+use containerd_shim::protos::prost_types::Any;
 use serde_json as json;
 use tempfile::tempdir;
 use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender};
@@ -26,9 +26,9 @@ impl<T: Instance + Send + Sync, E: EventSender> LocalWithDescrutor<T, E> {
 }
 
 #[async_trait]
-impl EventSender for Sender<(String, Box<dyn MessageDyn>)> {
+impl EventSender for Sender<(String, Any)> {
     async fn send(&self, event: impl Event) {
-        let _ = self.send((event.topic(), Box::new(event)));
+        let _ = self.send((event.topic(), Any::from_msg(&event).unwrap()));
     }
 }
 
@@ -138,7 +138,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::CREATED);
+    assert_eq!(state.status(), Status::Created);
 
     // A little janky since this is internal data, but check that this is seen as a sandbox container
     let i = local.get_instance("testbase")?;
@@ -157,7 +157,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::RUNNING);
+    assert_eq!(state.status(), Status::Running);
 
     let ll = local.clone();
     let (base_tx, mut base_rx) = channel();
@@ -190,7 +190,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::CREATED);
+    assert_eq!(state.status(), Status::Created);
 
     // again, this is janky since it is internal data, but check that this is seen as a "real" container.
     // this is the inverse of the above test case.
@@ -210,7 +210,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::RUNNING);
+    assert_eq!(state.status(), Status::Running);
 
     let stats = local
         .task_stats(StatsRequest {
@@ -218,7 +218,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert!(stats.has_stats());
+    assert!(stats.stats.is_some());
 
     let ll = local.clone();
     let (instance_tx, mut instance_rx) = channel();
@@ -252,7 +252,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::STOPPED);
+    assert_eq!(state.status(), Status::Stopped);
     local
         .task_delete(DeleteRequest {
             id: "testinstance".to_string(),
@@ -279,7 +279,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::RUNNING);
+    assert_eq!(state.status(), Status::Running);
 
     local
         .task_kill(KillRequest {
@@ -299,7 +299,7 @@ async fn test_cri_task() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::STOPPED);
+    assert_eq!(state.status(), Status::Stopped);
 
     local
         .task_delete(DeleteRequest {
@@ -381,7 +381,7 @@ async fn test_task_lifecycle() -> Result<()> {
         })
         .await?;
 
-    assert_eq!(state.status(), Status::CREATED);
+    assert_eq!(state.status(), Status::Created);
 
     local
         .task_start(StartRequest {
@@ -397,7 +397,7 @@ async fn test_task_lifecycle() -> Result<()> {
         })
         .await?;
 
-    assert_eq!(state.status(), Status::RUNNING);
+    assert_eq!(state.status(), Status::Running);
 
     let (tx, mut rx) = channel();
     let ll = local.clone();
@@ -419,7 +419,7 @@ async fn test_task_lifecycle() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert!(res.has_stats());
+    assert!(res.stats.is_some());
 
     local
         .task_kill(KillRequest {
@@ -440,7 +440,7 @@ async fn test_task_lifecycle() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    assert_eq!(state.status(), Status::STOPPED);
+    assert_eq!(state.status(), Status::Stopped);
 
     local
         .task_delete(DeleteRequest {

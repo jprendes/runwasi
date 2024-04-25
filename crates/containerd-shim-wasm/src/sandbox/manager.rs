@@ -4,24 +4,27 @@
 
 use std::collections::HashMap;
 use std::env::current_dir;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use containerd_shim::error::Error as ShimError;
 use containerd_shim::publisher::RemotePublisher;
-use containerd_shim::{self as shim, api, Task, TtrpcContext, TtrpcResult};
+use containerd_shim::{self as shim, api, Task, TtrpcResult};
 use oci_spec::runtime::Spec;
-use shim::protos::shim_async::{create_task, TaskClient};
+use shim::protos::trapeze::{Client, Server};
 use shim::util::write_str_to_file;
-use shim::Flags;
+use shim::{io_error, Flags};
 use tokio::sync::RwLock;
-use ttrpc::asynchronous::{Client, Server};
-use ttrpc::context;
+use trapeze::service;
 
 use super::error::Error;
 use super::instance::Instance;
-use crate::services::sandbox;
-use crate::services::sandbox_ttrpc::{Manager, ManagerClient};
+
+mod sandbox {
+    trapeze::include_protos!(["protos/sandbox.proto"]);
+    pub use self::runwasi::services::sandbox::v1::*;
+}
+
+pub use sandbox::Manager;
 
 /// Sandbox wraps an Instance and is used with the `Service` to manage multiple instances.
 pub trait Sandbox: Task + Send + Sync {
@@ -62,13 +65,8 @@ where
     }
 }
 
-#[async_trait]
 impl<T: Sandbox + 'static> Manager for Service<T> {
-    async fn create(
-        &self,
-        _ctx: &TtrpcContext,
-        req: sandbox::CreateRequest,
-    ) -> TtrpcResult<sandbox::CreateResponse> {
+    async fn create(&self, req: sandbox::CreateRequest) -> TtrpcResult<sandbox::CreateResponse> {
         let mut sandboxes = self.sandboxes.write().await;
 
         if sandboxes.contains_key(&req.id) {
@@ -86,42 +84,35 @@ impl<T: Sandbox + 'static> Manager for Service<T> {
             self.engine.clone(),
             publisher,
         );
-        let task_service = create_task(Arc::new(Box::new(sb)));
-        let mut server = Server::new().bind(&sock)?.register_service(task_service);
 
         sandboxes.insert(req.id.clone(), sock.clone());
 
         // TODO: why did we need setup_namespaces here?
         // setup_namespaces(&cfg)?;
-        server.start().await?;
+        tokio::spawn({
+            let sock = sock.clone();
+            async move { Server::new().register(service!(sb : Task)).bind(sock).await }
+        });
 
-        Ok(sandbox::CreateResponse {
-            socket_path: sock,
-            ..Default::default()
-        })
+        Ok(sandbox::CreateResponse { socket_path: sock })
     }
 
-    async fn delete(
-        &self,
-        _ctx: &TtrpcContext,
-        req: sandbox::DeleteRequest,
-    ) -> TtrpcResult<sandbox::DeleteResponse> {
+    async fn delete(&self, req: sandbox::DeleteRequest) -> TtrpcResult<sandbox::DeleteResponse> {
         let mut sandboxes = self.sandboxes.write().await;
         if !sandboxes.contains_key(&req.id) {
             return Err(Error::NotFound(req.id).into());
         }
         let sock = sandboxes.remove(&req.id).unwrap();
-        let c = Client::connect(&sock)?;
-        let tc = TaskClient::new(c);
+        let c = Client::connect(&sock).await.map_err(|_| trapeze::Status {
+            code: trapeze::Code::Internal.into(),
+            message: "Error connecting to containerd".into(),
+            ..Default::default()
+        })?;
 
-        tc.shutdown(
-            context::Context::default(),
-            &api::ShutdownRequest {
-                id: req.id,
-                now: true,
-                ..Default::default()
-            },
-        )
+        c.shutdown(api::ShutdownRequest {
+            id: req.id,
+            now: true,
+        })
         .await?;
 
         Ok(sandbox::DeleteResponse::default())
@@ -161,33 +152,31 @@ impl shim::Shim for Shim {
             .unwrap_or(&opts.id)
             .to_string();
 
-        let client = Client::connect("unix:///run/io.containerd.wasmwasi.v1/manager.sock")?;
-        let mc = ManagerClient::new(client);
-
-        let addr = match mc
-            .create(
-                context::Context::default(),
-                &sandbox::CreateRequest {
-                    id: sandbox.clone(),
-                    working_directory: dir.as_path().to_str().unwrap().to_string(),
-                    ttrpc_address: opts.ttrpc_address.clone(),
-                    ..Default::default()
-                },
-            )
+        let client = Client::connect("unix:///run/io.containerd.wasmwasi.v1/manager.sock")
             .await
+            .map_err(io_error!(err, "Error connecting to manager"))?;
+
+        let addr = match Manager::create(
+            &client,
+            sandbox::CreateRequest {
+                id: sandbox.clone(),
+                working_directory: dir.as_path().to_str().unwrap().to_string(),
+                ttrpc_address: opts.ttrpc_address.clone(),
+                ..Default::default()
+            },
+        )
+        .await
         {
             Ok(res) => res.socket_path,
             Err(_) => {
-                let res = mc
-                    .connect(
-                        context::Context::default(),
-                        &sandbox::ConnectRequest {
-                            id: sandbox,
-                            ttrpc_address: opts.ttrpc_address,
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+                let res = Manager::connect(
+                    &client,
+                    sandbox::ConnectRequest {
+                        id: sandbox,
+                        ttrpc_address: opts.ttrpc_address,
+                    },
+                )
+                .await?;
                 res.socket_path
             }
         };
@@ -222,11 +211,12 @@ impl shim::Shim for Shim {
             return Ok(api::DeleteResponse::default());
         }
 
-        let client = Client::connect("unix:///run/io.containerd.wasmwasi.v1/manager.sock")?;
-        let mc = ManagerClient::new(client);
-        mc.delete(
-            context::Context::default(),
-            &sandbox::DeleteRequest {
+        let client = Client::connect("unix:///run/io.containerd.wasmwasi.v1/manager.sock")
+            .await
+            .map_err(io_error!(err, "Error connecting to manager"))?;
+        Manager::delete(
+            &client,
+            sandbox::DeleteRequest {
                 id: sandbox,
                 namespace: self.namespace.clone(),
                 ..Default::default()

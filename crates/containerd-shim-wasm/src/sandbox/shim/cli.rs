@@ -85,7 +85,7 @@ where
     async fn delete_shim(&mut self) -> shim::Result<api::DeleteResponse> {
         Ok(api::DeleteResponse {
             exit_status: 137,
-            exited_at: Some(Utc::now().to_timestamp()).into(),
+            exited_at: Utc::now().to_timestamp().into(),
             ..Default::default()
         })
     }

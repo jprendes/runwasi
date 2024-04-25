@@ -1,15 +1,13 @@
 use std::fs::{create_dir_all, remove_file};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use containerd_shim::{parse, run, Config};
 use tokio::signal::unix::{signal, SignalKind};
-use ttrpc::asynchronous::Server;
+use trapeze::Server;
 
-use crate::sandbox::manager::Shim;
+use crate::sandbox::manager::{Manager, Shim};
 use crate::sandbox::shim::Local;
 use crate::sandbox::{Instance, ManagerService, ShimCli};
-use crate::services::sandbox_ttrpc::{create_manager, Manager};
 
 pub mod r#impl {
     pub use git_version::git_version;
@@ -84,26 +82,26 @@ pub fn shim_main<'a, I>(
             }
             s if s == shim_daemon => {
                 eprintln!("starting up!");
-                let s: ManagerService<Local<I>> = Default::default();
-                let s = Arc::new(Box::new(s) as Box<dyn Manager + Send + Sync>);
-                let service = create_manager(s);
+                let service: ManagerService<Local<I>> = Default::default();
+
+                let mut interrupt = signal(SignalKind::interrupt()).unwrap();
 
                 remove_file("/run/io.containerd.wasmwasi.v1/manager.sock").unwrap();
                 create_dir_all("/run/io.containerd.wasmwasi.v1/").unwrap();
-                let mut server = Server::new()
-                    .bind("unix:///run/io.containerd.wasmwasi.v1/manager.sock")
-                    .expect("failed to bind to socket")
-                    .register_service(service);
-
-                let mut interrupt = signal(SignalKind::interrupt()).unwrap();
-                server.start().await.expect("failed to start daemon");
+                let mut server = Server::new();
+                let server = server
+                    .register(trapeze::service!(service: Manager))
+                    .bind("unix:///run/io.containerd.wasmwasi.v1/manager.sock");
 
                 eprintln!("server started!");
                 eprintln!("press Ctrl+C to shutdown.");
-                interrupt.recv().await;
-                eprintln!("graceful shutdown");
 
-                server.shutdown().await.unwrap();
+                tokio::select! {
+                    s = server => { s.unwrap() },
+                    _ = interrupt.recv() => {},
+                }
+
+                eprintln!("shutdown");
             }
             _ => {
                 eprintln!("error: unrecognized binary name, expected one of {shim_cli}, {shim_client}, or {shim_daemon}.");

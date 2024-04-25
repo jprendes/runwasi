@@ -22,7 +22,7 @@ homepage = "https://github.com/containerd/runwasi"
 anyhow = "1.0"
 cap-std = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-containerd-shim = "0.7.1"
+containerd-shim = { git = "https://github.com/jprendes/rust-extensions.git", rev = "fcf6e0a64a2302f88eb24ebc5319d2dc94e30c9c" }
 containerd-shim-wasm = { path = "crates/containerd-shim-wasm", version = "0.5.0" }
 containerd-shim-wasm-test-modules = { path = "crates/containerd-shim-wasm-test-modules", version = "0.4.0"}
 oci-tar-builder = { path = "crates/oci-tar-builder", version = "0.4.0" }
@@ -33,7 +33,6 @@ libcontainer = { version = "0.3.2", default-features = false }
 log = "0.4"
 nix = "0.28"
 oci-spec = { version = "0.6.4", features = ["runtime"] }
-protobuf = "=3.2"
 serde = "1.0"
 serde_json = "1.0"
 sha256 = "1.5.0"
@@ -41,7 +40,6 @@ tar = "0.4"
 tempfile = "3.10"
 thiserror = "1.0"
 tokio = { version = "1.36.0", features = [ "full" ] }
-ttrpc = "0.8.0"
 wat = "1.205"
 windows-sys = "0.52"
 serial_test = "2"
