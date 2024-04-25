@@ -1,7 +1,6 @@
 #![cfg(unix)]
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::content_client::ContentClient;
@@ -43,32 +42,43 @@ pub struct Client {
 
 #[derive(Debug)]
 pub(crate) struct WriteContent {
-    _lease: LeaseGuard,
+    lease: LeaseGuard,
     pub digest: String,
+}
+
+impl WriteContent {
+    // used in tests
+    #[allow(dead_code)]
+    pub async fn release(self) -> anyhow::Result<()> {
+        self.lease.release().await
+    }
 }
 
 // sync wrapper implementation from https://tokio.rs/tokio/topics/bridging
 impl Client {
     // wrapper around connection that will establish a connection and create a client
     pub async fn connect(
-        address: impl AsRef<Path> + ToString,
-        namespace: impl ToString,
+        address: impl Into<String>,
+        namespace: impl Into<String>,
     ) -> Result<Client> {
-        let inner = containerd_client::connect(address.as_ref())
+        let address = address.into();
+        let namespace = namespace.into();
+
+        let inner = containerd_client::connect(&address)
             .await
             .map_err(|err| ShimError::Containerd(err.to_string()))?;
 
         Ok(Client {
             inner,
-            namespace: namespace.to_string(),
-            address: address.to_string(),
+            namespace,
+            address,
         })
     }
 
     // wrapper around read that will read the entire content file
-    async fn read_content(&self, digest: impl ToString) -> Result<Vec<u8>> {
+    async fn read_content(&self, digest: impl Into<String>) -> Result<Vec<u8>> {
         let req = ReadContentRequest {
-            digest: digest.to_string(),
+            digest: digest.into(),
             ..Default::default()
         };
         let req = with_namespace!(req, self.namespace);
@@ -85,9 +95,9 @@ impl Client {
 
     // used in tests to clean up content
     #[allow(dead_code)]
-    async fn delete_content(&self, digest: impl ToString) -> Result<()> {
+    async fn delete_content(&self, digest: impl Into<String>) -> Result<()> {
         let req = DeleteContentRequest {
-            digest: digest.to_string(),
+            digest: digest.into(),
         };
         let req = with_namespace!(req, self.namespace);
         ContentClient::new(self.inner.clone())
@@ -98,13 +108,14 @@ impl Client {
     }
 
     // wrapper around lease that will create a lease and return a guard that will delete the lease when dropped
-    async fn lease(&self, reference: String) -> Result<LeaseGuard> {
+    async fn lease(&self, reference: impl AsRef<str>) -> Result<LeaseGuard> {
+        let reference = reference.as_ref();
         let mut lease_labels = HashMap::new();
         // Unwrap is safe here since 24 hours is a valid time
         let expire = chrono::Utc::now() + chrono::Duration::try_hours(24).unwrap();
         lease_labels.insert("containerd.io/gc.expire".to_string(), expire.to_rfc3339());
         let lease_request = containerd_client::services::v1::CreateRequest {
-            id: reference.clone(),
+            id: reference.into(),
             labels: lease_labels,
         };
 
@@ -120,21 +131,17 @@ impl Client {
                 ShimError::Containerd(format!("unable to create lease for  {}", reference))
             })?;
 
-        Ok(LeaseGuard {
-            lease_id: lease.id,
-            address: self.address.clone(),
-            namespace: self.namespace.clone(),
-        })
+        Ok(LeaseGuard::new(lease.id, &self.namespace, &self.address))
     }
 
     async fn save_content(
         &self,
         data: Vec<u8>,
-        unique_id: &str,
+        unique_id: impl AsRef<str>,
         labels: HashMap<String, String>,
     ) -> Result<WriteContent> {
         let expected = format!("sha256:{}", digest(data.clone()));
-        let reference = format!("precompile-{}", unique_id);
+        let reference = format!("precompile-{}", unique_id.as_ref());
         let lease = self.lease(reference.clone()).await?;
 
         let digest = async {
@@ -248,14 +255,15 @@ impl Client {
         .await?;
 
         Ok(WriteContent {
-            _lease: lease,
+            lease,
             digest: digest.clone(),
         })
     }
 
-    async fn get_info(&self, content_digest: &str) -> Result<Info> {
+    async fn get_info(&self, content_digest: impl AsRef<str>) -> Result<Info> {
+        let content_digest = content_digest.as_ref();
         let req = InfoRequest {
-            digest: content_digest.to_string(),
+            digest: content_digest.into(),
         };
         let req = with_namespace!(req, self.namespace);
         let info = ContentClient::new(self.inner.clone())
@@ -265,7 +273,7 @@ impl Client {
             .into_inner()
             .info
             .ok_or_else(|| {
-                ShimError::Containerd(format!("failed to get info for content {}", content_digest))
+                ShimError::Containerd(format!("failed to get info for content {content_digest}"))
             })?;
         Ok(info)
     }
@@ -290,9 +298,9 @@ impl Client {
         Ok(info)
     }
 
-    async fn get_image(&self, image_name: impl ToString) -> Result<Image> {
-        let name = image_name.to_string();
-        let req = GetImageRequest { name };
+    async fn get_image(&self, image_name: impl AsRef<str>) -> Result<Image> {
+        let name = image_name.as_ref();
+        let req = GetImageRequest { name: name.into() };
         let req = with_namespace!(req, self.namespace);
         let image = ImagesClient::new(self.inner.clone())
             .get(req)
@@ -301,10 +309,7 @@ impl Client {
             .into_inner()
             .image
             .ok_or_else(|| {
-                ShimError::Containerd(format!(
-                    "failed to get image for image {}",
-                    image_name.to_string()
-                ))
+                ShimError::Containerd(format!("failed to get image for image {name}",))
             })?;
         Ok(image)
     }
@@ -411,86 +416,124 @@ impl Client {
             return Ok((vec![], platform));
         }
 
-        if needs_precompile {
-            log::info!("precompiling layers for image: {}", container.image);
-            let compiled_layers = match engine.precompile(&layers) {
-                Ok(compiled_layers) => {
-                    if compiled_layers.len() != layers.len() {
-                        return Err(ShimError::FailedPrecondition(
-                            "precompile returned wrong number of layers".to_string(),
-                        ));
-                    }
-                    compiled_layers
+        if !needs_precompile {
+            log::info!("using OCI layers");
+            return Ok((layers, platform));
+        }
+
+        let mut precompiled_content = None;
+        let result = self
+            .precompile(
+                container,
+                engine,
+                layers,
+                platform,
+                precompile_id,
+                image_digest,
+                &mut precompiled_content,
+            )
+            .await;
+
+        if let Some(precompiled_content) = precompiled_content {
+            let _ = precompiled_content.release().await;
+        }
+
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn precompile<T: Engine>(
+        &self,
+        container: Container,
+        engine: &T,
+        layers: Vec<WasmLayer>,
+        platform: Platform,
+        precompile_id: String,
+        image_digest: String,
+        precompiled_content: &mut Option<WriteContent>,
+    ) -> Result<(Vec<oci::WasmLayer>, Platform)> {
+        log::info!("precompiling layers for image: {}", container.image);
+        let compiled_layers = match engine.precompile(&layers) {
+            Ok(compiled_layers) => {
+                if compiled_layers.len() != layers.len() {
+                    return Err(ShimError::FailedPrecondition(
+                        "precompile returned wrong number of layers".to_string(),
+                    ));
                 }
-                Err(e) => {
-                    log::error!("precompilation failed: {}", e);
-                    return Ok((layers, platform));
-                }
-            };
-
-            let mut layers_for_runtime = Vec::with_capacity(compiled_layers.len());
-            for (i, compiled_layer) in compiled_layers.iter().enumerate() {
-                if compiled_layer.is_none() {
-                    log::debug!("no compiled layer using original");
-                    layers_for_runtime.push(layers[i].clone());
-                    continue;
-                }
-
-                let compiled_layer = compiled_layer.as_ref().unwrap();
-                let original_config = &layers[i].config;
-                let labels = HashMap::from([(
-                    format!("{precompile_id}/original"),
-                    original_config.digest().to_string(),
-                )]);
-                let precompiled_content = self
-                    .save_content(compiled_layer.clone(), &precompile_id, labels)
-                    .await?;
-
-                log::debug!(
-                    "updating original layer {} with compiled layer {}",
-                    original_config.digest(),
-                    precompiled_content.digest
-                );
-                // We add two labels here:
-                // - one with cache key per engine instance
-                // - one with a gc ref flag so it doesn't get cleaned up as long as the original layer exists
-                let mut original_layer = self.get_info(original_config.digest()).await?;
-                original_layer
-                    .labels
-                    .insert(precompile_id.clone(), precompiled_content.digest.clone());
-                original_layer.labels.insert(
-                    format!("containerd.io/gc.ref.content.precompile.{}", i),
-                    precompiled_content.digest.clone(),
-                );
-                self.update_info(original_layer).await?;
-
-                // The original image is considered a root object, by adding a ref to the new compiled content
-                // We tell containerd to not garbage collect the new content until this image is removed from the system
-                // this ensures that we keep the content around after the lease is dropped
-                // We also save the precompiled flag here since the image labels can be mutated containerd, for example if the image is pulled twice
-                log::debug!(
-                    "updating image content with precompile digest to avoid garbage collection"
-                );
-                let mut image_content = self.get_info(&image_digest).await?;
-                image_content.labels.insert(
-                    format!("containerd.io/gc.ref.content.precompile.{}", i),
-                    precompiled_content.digest,
-                );
-                image_content
-                    .labels
-                    .insert(precompile_id.clone(), "true".to_string());
-                self.update_info(image_content).await?;
-
-                layers_for_runtime.push(WasmLayer {
-                    config: original_config.clone(),
-                    layer: compiled_layer.clone(),
-                });
+                compiled_layers
             }
-            return Ok((layers_for_runtime, platform));
+            Err(e) => {
+                log::error!("precompilation failed: {}", e);
+                return Ok((layers, platform));
+            }
         };
 
-        log::info!("using OCI layers");
-        Ok((layers, platform))
+        let mut layers_for_runtime = Vec::with_capacity(compiled_layers.len());
+        for (i, compiled_layer) in compiled_layers.iter().enumerate() {
+            if compiled_layer.is_none() {
+                log::debug!("no compiled layer using original");
+                layers_for_runtime.push(layers[i].clone());
+                continue;
+            }
+
+            let compiled_layer = compiled_layer.as_ref().unwrap();
+            let original_config = &layers[i].config;
+            let labels = HashMap::from([(
+                format!("{precompile_id}/original"),
+                original_config.digest().to_string(),
+            )]);
+            let content = self
+                .save_content(compiled_layer.clone(), &precompile_id, labels)
+                .await?;
+
+            let digest = content.digest.clone();
+            *precompiled_content = Some(content);
+
+            log::debug!(
+                "updating original layer {} with compiled layer {}",
+                original_config.digest(),
+                digest,
+            );
+            // We add two labels here:
+            // - one with cache key per engine instance
+            // - one with a gc ref flag so it doesn't get cleaned up as long as the original layer exists
+            let mut original_layer = self.get_info(original_config.digest()).await?;
+            original_layer
+                .labels
+                .insert(precompile_id.clone(), digest.clone());
+            original_layer.labels.insert(
+                format!("containerd.io/gc.ref.content.precompile.{}", i),
+                digest.clone(),
+            );
+            self.update_info(original_layer).await?;
+
+            // The original image is considered a root object, by adding a ref to the new compiled content
+            // We tell containerd to not garbage collect the new content until this image is removed from the system
+            // this ensures that we keep the content around after the lease is dropped
+            // We also save the precompiled flag here since the image labels can be mutated containerd, for example if the image is pulled twice
+            log::debug!(
+                "updating image content with precompile digest to avoid garbage collection"
+            );
+            let mut image_content = self.get_info(&image_digest).await?;
+            image_content.labels.insert(
+                format!("containerd.io/gc.ref.content.precompile.{}", i),
+                digest,
+            );
+            image_content
+                .labels
+                .insert(precompile_id.clone(), "true".to_string());
+            self.update_info(image_content).await?;
+
+            layers_for_runtime.push(WasmLayer {
+                config: original_config.clone(),
+                layer: compiled_layer.clone(),
+            });
+
+            if let Some(content) = precompiled_content.take() {
+                let _ = content.release().await;
+            }
+        }
+        Ok((layers_for_runtime, platform))
     }
 
     async fn read_wasm_layer(
@@ -599,7 +642,7 @@ mod tests {
         let expected = digest(data.clone());
         let expected = format!("sha256:{}", expected);
 
-        let label = HashMap::from([(precompile_label("test", "hasdfh"), "original".to_string())]);
+        let label = HashMap::from([(precompile_label("test", "hasdfh"), "original".into())]);
         let returned = client
             .save_content(data, "test", label.clone())
             .await
@@ -614,9 +657,9 @@ mod tests {
             .await
             .expect_err("Should not be able to save when lease is open");
 
-        // need to drop the lease to be able to create a second one
+        // need to release the lease to be able to create a second one
         // a second call should be successful since it already exists
-        drop(returned);
+        returned.release().await.unwrap();
 
         // a second call should be successful since it already exists
         let returned = client
