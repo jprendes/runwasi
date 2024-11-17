@@ -53,19 +53,25 @@ use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 
 type WasmedgeTestInstance = Instance<WasmEdgeEngine>;
 
-fn run_wasmedge_test_with_spec(wasmbytes: &[u8]) -> Result<u32, Error> {
+async fn run_wasmedge_test_with_spec(wasmbytes: &[u8]) -> Result<u32, Error> {
     let (exit_code, _, _) = WasiTest::<WasmedgeTestInstance>::builder()?
         .with_wasm(wasmbytes)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
     Ok(exit_code)
 }
 
-fn run_wasmedge_benchmark(group: &mut BenchmarkGroup<WallTime>, bytes: &[u8]) {
-    group.bench_function("Wasmedge", |b| {
-        b.iter(|| {
-            let res = run_wasmedge_test_with_spec(bytes);
+fn run_wasmedge_benchmark(group: &mut BenchmarkGroup<'_, WallTime>, bytes: &[u8]) {
+    group.bench_function("Wasmedge", move |b| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        b.to_async(runtime).iter(|| async {
+            let res = run_wasmedge_test_with_spec(bytes).await;
             match res {
                 Err(e) => {
                     panic!("Error running Wasmedge benchmark: {}", e);
@@ -151,4 +157,3 @@ criterion_group! {
 }
 
 criterion_main!(benches);
-

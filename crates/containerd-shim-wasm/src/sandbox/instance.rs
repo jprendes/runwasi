@@ -1,7 +1,7 @@
 //! Abstractions for running/managing a wasm/wasi instance.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -116,7 +116,10 @@ pub trait Instance: 'static {
     type Engine: Send + Sync + Clone;
 
     /// Create a new instance
-    fn new(id: String, cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, Error>
+    fn new(
+        id: String,
+        cfg: Option<&InstanceConfig<Self::Engine>>,
+    ) -> impl Future<Output = Result<Self, Error>> + Send
     where
         Self: Sized;
 
@@ -134,13 +137,5 @@ pub trait Instance: 'static {
 
     /// Waits for the instance to finish and returns its exit code
     /// This is a blocking call.
-    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), parent = tracing::Span::current(), level = "Info"))]
-    fn wait(&self) -> (u32, DateTime<Utc>) {
-        self.wait_timeout(None).unwrap()
-    }
-
-    /// Waits for the instance to finish and returns its exit code
-    /// Returns None if the timeout is reached before the instance has finished.
-    /// This is a blocking call.
-    fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)>;
+    fn wait(&self) -> impl std::future::Future<Output = (u32, DateTime<Utc>)> + Send;
 }

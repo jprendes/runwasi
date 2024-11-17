@@ -14,7 +14,7 @@ doctest = false
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
-containerd-shim = { workspace = true }
+#containerd-shim = { workspace = true }
 containerd-shim-wasm-test-modules = { workspace = true, optional = true }
 oci-tar-builder = { workspace = true, optional = true }
 crossbeam = { workspace = true }
@@ -33,7 +33,10 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 futures = { version = "0.3.30" }
 wasmparser = { version = "0.219.1" }
 tokio-stream = { version = "0.1" }
+tokio-util = { workspace = true, features = ["rt"] }
 sha256 = { workspace = true }
+shimkit = "0.2.1"
+trapeze = "0.7.3"
 
 # tracing
 # note: it's important to keep the version of tracing in sync with tracing-subscriber

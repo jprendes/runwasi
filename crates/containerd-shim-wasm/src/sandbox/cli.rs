@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use containerd_shim::{parse, run, Config};
+use containerd_shim::{parse, Config};
 
 #[cfg(feature = "opentelemetry")]
 use crate::sandbox::shim::{otel_traces_enabled, OtlpConfig};
-use crate::sandbox::{Instance, ShimCli};
+use crate::sandbox::{Instance /*, ShimCli*/};
 
 pub mod r#impl {
     pub use git_version::git_version;
@@ -75,7 +75,7 @@ fn shim_main_inner<'a, I>(
     version: &str,
     revision: impl Into<Option<&'a str>>,
     shim_version: impl Into<Option<&'a str>>,
-    config: Option<Config>,
+    _config: Option<Config>,
 ) where
     I: 'static + Instance + Sync + Send,
     I::Engine: Default,
@@ -109,7 +109,7 @@ fn shim_main_inner<'a, I>(
     let shim_version = shim_version.into().unwrap_or("v1");
 
     let lower_name = name.to_lowercase();
-    let shim_id = format!("io.containerd.{lower_name}.{shim_version}");
+    let _shim_id = format!("io.containerd.{lower_name}.{shim_version}");
 
-    run::<ShimCli<I>>(&shim_id, config);
+    //run::<ShimCli<I>>(&shim_id, config);
 }

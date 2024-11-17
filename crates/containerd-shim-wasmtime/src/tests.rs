@@ -27,21 +27,26 @@ impl WasiConfig for WasiTestConfig {
     }
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_delete_after_create() -> anyhow::Result<()> {
-    WasiTest::<WasiInstance>::builder()?.build()?.delete()?;
+async fn test_delete_after_create() -> anyhow::Result<()> {
+    WasiTest::<WasiInstance>::builder()?
+        .build()
+        .await?
+        .delete()?;
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_hello_world() -> anyhow::Result<()> {
+async fn test_hello_world() -> anyhow::Result<()> {
     let (exit_code, stdout, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WORLD)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -49,14 +54,19 @@ fn test_hello_world() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_hello_world_oci() -> anyhow::Result<()> {
+async fn test_hello_world_oci() -> anyhow::Result<()> {
     let (builder, _oci_cleanup) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WORLD)?
         .as_oci_image(None, None)?;
 
-    let (exit_code, stdout, _) = builder.build()?.start()?.wait(Duration::from_secs(10))?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -64,9 +74,9 @@ fn test_hello_world_oci() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
+async fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
     let (builder, _oci_cleanup1) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WORLD)?
         .as_oci_image(
@@ -74,7 +84,12 @@ fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
             Some("c1".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build()?.start()?.wait(Duration::from_secs(10))?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -94,7 +109,12 @@ fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
             Some("c2".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build()?.start()?.wait(Duration::from_secs(10))?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -102,9 +122,9 @@ fn test_hello_world_oci_uses_precompiled() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow::Result<()> {
+async fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow::Result<()> {
     let (builder, _oci_cleanup1) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WORLD)?
         .as_oci_image(
@@ -112,7 +132,12 @@ fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow::Resul
             Some("c1".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build()?.start()?.wait(Duration::from_secs(10))?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -134,7 +159,12 @@ fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow::Resul
             Some("c2".to_string()),
         )?;
 
-    let (exit_code, stdout, _) = builder.build()?.start()?.wait(Duration::from_secs(10))?;
+    let (exit_code, stdout, _) = builder
+        .build()
+        .await?
+        .start()?
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -142,15 +172,17 @@ fn test_hello_world_oci_uses_precompiled_when_content_removed() -> anyhow::Resul
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_custom_entrypoint() -> anyhow::Result<()> {
+async fn test_custom_entrypoint() -> anyhow::Result<()> {
     let (exit_code, stdout, _) = WasiTest::<WasiInstance>::builder()?
         .with_start_fn("foo")
         .with_wasm(CUSTOM_ENTRYPOINT)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "hello world\n");
@@ -158,42 +190,48 @@ fn test_custom_entrypoint() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_unreachable() -> anyhow::Result<()> {
+async fn test_unreachable() -> anyhow::Result<()> {
     let (exit_code, _, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(UNREACHABLE)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_ne!(exit_code, 0);
 
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_exit_code() -> anyhow::Result<()> {
+async fn test_exit_code() -> anyhow::Result<()> {
     let (exit_code, _, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(EXIT_CODE)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 42);
 
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_seccomp() -> anyhow::Result<()> {
+async fn test_seccomp() -> anyhow::Result<()> {
     let (exit_code, stdout, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(SECCOMP)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout.trim(), "current working dir: /");
@@ -201,14 +239,16 @@ fn test_seccomp() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_has_default_devices() -> anyhow::Result<()> {
+async fn test_has_default_devices() -> anyhow::Result<()> {
     let (exit_code, _, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HAS_DEFAULT_DEVICES)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
 
@@ -220,15 +260,17 @@ fn test_has_default_devices() -> anyhow::Result<()> {
 // The current limitation is that there is no way to pass arguments
 // to the exported function.
 // Issue that tracks this: https://github.com/containerd/runwasi/issues/414
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_simple_component() -> anyhow::Result<()> {
+async fn test_simple_component() -> anyhow::Result<()> {
     let (exit_code, _, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(SIMPLE_COMPONENT)?
         .with_start_fn("thunk")
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
 
@@ -243,14 +285,16 @@ fn test_simple_component() -> anyhow::Result<()> {
 // The wasm component is built and copied over from
 // https://github.com/Mossaka/wasm-component-hello-world. See
 // README.md for how to build the component.
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_wasip2_component() -> anyhow::Result<()> {
+async fn test_wasip2_component() -> anyhow::Result<()> {
     let (exit_code, stdout, _) = WasiTest::<WasiInstance>::builder()?
         .with_wasm(COMPONENT_HELLO_WORLD)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
 
     assert_eq!(exit_code, 0);
     assert_eq!(stdout, "Hello, world!\n");
@@ -265,24 +309,25 @@ fn test_wasip2_component() -> anyhow::Result<()> {
 //
 // The wasm component is built using cargo component as illustrated in the following example::
 // https://opensource.microsoft.com/blog/2024/09/25/distributing-webassembly-components-using-oci-registries/
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_wasip2_component_http_proxy() -> anyhow::Result<()> {
+async fn test_wasip2_component_http_proxy() -> anyhow::Result<()> {
     let srv = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WASI_HTTP)?
         .with_host_network()
-        .build()?;
+        .build()
+        .await?;
 
     let srv = srv.start()?;
-    let response = http_get();
+    let response = http_get().await;
 
     let response = response.expect("Server did not start in time");
     assert!(response.status().is_success());
 
-    let body = response.text().unwrap();
+    let body = response.text().await.unwrap();
     assert_eq!(body, "Hello, this is your first wasi:http/proxy world!\n");
 
-    let (exit_code, _, _) = srv.ctrl_c()?.wait(Duration::from_secs(5))?;
+    let (exit_code, _, _) = srv.ctrl_c()?.wait(Duration::from_secs(5)).await?;
     assert_eq!(exit_code, 0);
 
     Ok(())
@@ -291,65 +336,67 @@ fn test_wasip2_component_http_proxy() -> anyhow::Result<()> {
 // The wasm component is built using componentize-dotnet as illustrated in the following example::
 // https://bytecodealliance.org/articles/simplifying-components-for-dotnet-developers-with-componentize-dotnet
 // this ensures we are able to use wasm built from other languages https://github.com/containerd/runwasi/pull/723
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_wasip2_component_http_proxy_csharp() -> anyhow::Result<()> {
+async fn test_wasip2_component_http_proxy_csharp() -> anyhow::Result<()> {
     let srv = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WASI_HTTP_CSHARP)?
         .with_host_network()
-        .build()?;
+        .build()
+        .await?;
 
     let srv = srv.start()?;
 
     // dotnet takes a bit longer to start up
     // Todo: find out why this doesn't happen in wasmtime directly
-    let response = http_get_with_backoff_secs(2);
+    let response = http_get_with_backoff_secs(2).await;
 
     let response = response.expect("Server did not start in time");
     assert!(response.status().is_success());
 
-    let body = response.text().unwrap();
+    let body = response.text().await.unwrap();
     assert_eq!(body, "Hello, from C#!");
 
-    let (exit_code, _, _) = srv.ctrl_c()?.wait(Duration::from_secs(5))?;
+    let (exit_code, _, _) = srv.ctrl_c()?.wait(Duration::from_secs(5)).await?;
     assert_eq!(exit_code, 0);
 
     Ok(())
 }
 
 // Test that the shim can terminate component targeting wasi:http/proxy by sending SIGTERM.
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[serial]
-fn test_wasip2_component_http_proxy_force_shutdown() -> anyhow::Result<()> {
+async fn test_wasip2_component_http_proxy_force_shutdown() -> anyhow::Result<()> {
     let srv = WasiTest::<WasiInstance>::builder()?
         .with_wasm(HELLO_WASI_HTTP)?
         .with_host_network()
-        .build()?;
+        .build()
+        .await?;
 
     let srv = srv.start()?;
-    assert!(http_get().unwrap().status().is_success());
+    assert!(http_get().await.unwrap().status().is_success());
 
     // Send SIGTERM
-    let (exit_code, _, _) = srv.terminate()?.wait(Duration::from_secs(5))?;
+    let (exit_code, _, _) = srv.terminate()?.wait(Duration::from_secs(5)).await?;
     // The exit code indicates that the process did not exit cleanly
     assert_eq!(exit_code, 128 + libc::SIGTERM as u32);
 
     Ok(())
 }
 
-fn http_get() -> reqwest::Result<reqwest::blocking::Response> {
-    http_get_with_backoff_secs(1)
+async fn http_get() -> reqwest::Result<reqwest::Response> {
+    http_get_with_backoff_secs(1).await
 }
 
 // Helper method to make a `GET` request
-fn http_get_with_backoff_secs(backoff: u64) -> reqwest::Result<reqwest::blocking::Response> {
+async fn http_get_with_backoff_secs(backoff: u64) -> reqwest::Result<reqwest::Response> {
     const MAX_ATTEMPTS: u32 = 10;
     let backoff_duration: Duration = Duration::from_secs(backoff);
 
     let mut attempts = 0;
 
     loop {
-        match reqwest::blocking::get("http://127.0.0.1:8080") {
+        match reqwest::get("http://127.0.0.1:8080").await {
             Ok(resp) => break Ok(resp),
             Err(err) if attempts == MAX_ATTEMPTS => break Err(err),
             Err(_) => {

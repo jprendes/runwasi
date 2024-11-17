@@ -116,30 +116,30 @@ test: test-wasm $(RUNTIMES:%=test-%);
 test-common: test-wasm;
 test-wasm:
 	# oci-tar-builder and wasi-demo-app have no tests
-	RUST_LOG=trace $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasm $(FEATURES_wasm) --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
+	RUST_LOG=info $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasm $(FEATURES_wasm) --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
 
 test-wasmedge:
 	# run tests in one thread to prevent parallelism
-	RUST_LOG=trace $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasmedge $(FEATURES_wasmedge) --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
+	RUST_LOG=info $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasmedge $(FEATURES_wasmedge) --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
 ifneq ($(OS), Windows_NT)
 ifneq ($(patsubst %-musl,,xx_$(TARGET)),)
 	# run wasmedge test without the default `static` feature
-	RUST_LOG=trace $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasmedge --no-default-features --features standalone --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
+	RUST_LOG=info $(CARGO) test $(TARGET_FLAG) --package containerd-shim-wasmedge --no-default-features --features standalone --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
 endif
 endif
 
 test-%:
 	# run tests in one thread to prevent parallelism
-	RUST_LOG=trace $(CARGO) test $(TARGET_FLAG) --package containerd-shim-$* $(FEATURES_$*) --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
+	RUST_LOG=info $(CARGO) test $(TARGET_FLAG) --package containerd-shim-$* $(FEATURES_$*) --lib --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
 
 test-doc:
-	RUST_LOG=trace $(CARGO) test --doc -- --test-threads=1
+	RUST_LOG=info $(CARGO) test --doc -- --test-threads=1
 
 generate-doc:
-	RUST_LOG=trace $(CARGO) doc --workspace --all-features --no-deps --document-private-items --exclude wasi-demo-app
+	RUST_LOG=info $(CARGO) doc --workspace --all-features --no-deps --document-private-items --exclude wasi-demo-app
 
 test-oci-tar-builder:
-	RUST_LOG=trace $(CARGO) test $(TARGET_FLAG) --package oci-tar-builder $(FEATURES_$*) --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
+	RUST_LOG=info $(CARGO) test $(TARGET_FLAG) --package oci-tar-builder $(FEATURES_$*) --verbose $(TEST_ARGS_SEP) --nocapture --test-threads=1
 
 .PHONY: install install-%
 install: $(RUNTIMES:%=install-%);

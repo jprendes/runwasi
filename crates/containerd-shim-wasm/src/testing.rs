@@ -14,6 +14,7 @@ use oci_spec::runtime::{
     RootBuilder, SpecBuilder,
 };
 
+use crate::sandbox::utils::WithTimeout as _;
 use crate::sandbox::{Instance, InstanceConfig};
 
 pub const TEST_NAMESPACE: &str = "runwasi-test";
@@ -146,7 +147,7 @@ where
         ))
     }
 
-    pub fn build(self) -> Result<WasiTest<WasiInstance>> {
+    pub async fn build(self) -> Result<WasiTest<WasiInstance>> {
         let tempdir = self.tempdir;
         let dir = tempdir.path();
 
@@ -186,7 +187,7 @@ where
             .set_stderr(dir.join("stderr"))
             .set_stdin(dir.join("stdin"));
 
-        let instance = WasiInstance::new(self.container_name, Some(&cfg))?;
+        let instance = WasiInstance::new(self.container_name, Some(&cfg)).await?;
         Ok(WasiTest { instance, tempdir })
     }
 }
@@ -229,11 +230,11 @@ where
         Ok(self)
     }
 
-    pub fn wait(&self, timeout: Duration) -> Result<(u32, String, String)> {
+    pub async fn wait(&self, timeout: Duration) -> Result<(u32, String, String)> {
         let dir = self.tempdir.path();
 
         log::info!("waiting wasi test");
-        let (status, _) = match self.instance.wait_timeout(timeout) {
+        let (status, _) = match self.instance.wait().with_timeout(timeout).await {
             Some(res) => res,
             None => {
                 self.instance.kill(SIGKILL)?;

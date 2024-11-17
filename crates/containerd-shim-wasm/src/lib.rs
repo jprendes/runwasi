@@ -13,4 +13,5 @@ pub(crate) mod sys;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use containerd_shim::Config;
+pub use shimkit;
+pub use shimkit::main;

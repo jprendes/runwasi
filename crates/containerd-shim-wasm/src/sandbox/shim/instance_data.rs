@@ -1,5 +1,4 @@
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
@@ -15,9 +14,9 @@ pub(super) struct InstanceData<T: Instance> {
 
 impl<T: Instance> InstanceData<T> {
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    pub fn new(id: impl AsRef<str>, cfg: InstanceConfig<T::Engine>) -> Result<Self> {
+    pub async fn new(id: impl AsRef<str>, cfg: InstanceConfig<T::Engine>) -> Result<Self> {
         let id = id.as_ref().to_string();
-        let instance = T::new(id, Some(&cfg))?;
+        let instance = T::new(id, Some(&cfg)).await?;
         Ok(Self {
             instance,
             cfg,
@@ -80,20 +79,10 @@ impl<T: Instance> InstanceData<T> {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    pub fn wait(&self) -> (u32, DateTime<Utc>) {
-        let res = self.instance.wait();
+    pub async fn wait(&self) -> (u32, DateTime<Utc>) {
+        let res = self.instance.wait().await;
         let mut s = self.state.write().unwrap();
         *s = TaskState::Exited;
-        res
-    }
-
-    #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    pub fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)> {
-        let res = self.instance.wait_timeout(t);
-        if res.is_some() {
-            let mut s = self.state.write().unwrap();
-            *s = TaskState::Exited;
-        }
         res
     }
 }

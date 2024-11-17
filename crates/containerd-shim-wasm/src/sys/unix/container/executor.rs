@@ -1,9 +1,9 @@
-use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use libcontainer::workload::default::DefaultExecutor;
@@ -24,11 +24,18 @@ enum InnerExecutor {
     CantHandle,
 }
 
+macro_rules! run_in_new_thread {
+    // Run code in a new thread so that runtimes that use tokio can do so.
+    ($expression:expr) => {
+        std::thread::scope(move |s| s.spawn(move || $expression).join().unwrap())
+    };
+}
+
 #[derive(Clone)]
 pub(crate) struct Executor<E: Engine> {
     engine: E,
     stdio: Stdio,
-    inner: OnceCell<InnerExecutor>,
+    inner: OnceLock<InnerExecutor>,
     wasm_layers: Vec<WasmLayer>,
     platform: Platform,
 }
@@ -56,7 +63,7 @@ impl<E: Engine> LibcontainerExecutor for Executor<E> {
             }
             InnerExecutor::Wasm => {
                 log::info!("calling start function");
-                match self.engine.run_wasi(&self.ctx(spec), self.stdio.take()) {
+                match run_in_new_thread!(self.engine.run_wasi(&self.ctx(spec), self.stdio.take())) {
                     Ok(code) => std::process::exit(code),
                     Err(err) => {
                         log::info!("error running start function: {err}");
@@ -111,7 +118,7 @@ impl<E: Engine> Executor<E> {
                 Ok(_) => InnerExecutor::Linux,
                 Err(err) => {
                     log::debug!("error checking if linux container: {err}. Fallback to wasm container");
-                    match self.engine.can_handle(ctx) {
+                    match run_in_new_thread!( self.engine.can_handle(ctx) ) {
                         Ok(_) => InnerExecutor::Wasm,
                         Err(err) => {
                             // log an error and return

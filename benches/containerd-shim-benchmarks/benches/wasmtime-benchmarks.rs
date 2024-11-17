@@ -69,19 +69,25 @@ impl WasiConfig for WasiTestConfig {
 
 type WasmtimeTestInstance = Instance<WasmtimeEngine<WasiTestConfig>>;
 
-fn run_wasmtime_test_with_spec(wasmbytes: &[u8]) -> Result<u32, Error> {
+async fn run_wasmtime_test_with_spec(wasmbytes: &[u8]) -> Result<u32, Error> {
     let (exit_code, _, _) = WasiTest::<WasmtimeTestInstance>::builder()?
         .with_wasm(wasmbytes)?
-        .build()?
+        .build()
+        .await?
         .start()?
-        .wait(Duration::from_secs(10))?;
+        .wait(Duration::from_secs(10))
+        .await?;
     Ok(exit_code)
 }
 
 fn run_wasmtime_benchmark(group: &mut BenchmarkGroup<WallTime>, bytes: &[u8]) {
     group.bench_function("Wasmtime", |b| {
-        b.iter(|| {
-            let res = run_wasmtime_test_with_spec(bytes);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        b.to_async(runtime).iter(|| async {
+            let res = run_wasmtime_test_with_spec(bytes).await;
             match res {
                 Err(e) => {
                     panic!("Error running Wasmtime benchmark: {}", e);

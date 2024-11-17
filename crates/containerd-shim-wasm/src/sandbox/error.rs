@@ -2,9 +2,8 @@
 //! This handles converting to the appropriate ttrpc error codes
 
 use anyhow::Error as AnyError;
-use containerd_shim::protos::ttrpc;
-use containerd_shim::Error as ShimError;
 use oci_spec::OciSpecError;
+use shimkit::types::Status as TtrpcStatus;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,7 +18,7 @@ pub enum Error {
     Others(String),
     /// Errors to/from the containerd shim library.
     #[error("{0}")]
-    Shim(#[from] ShimError),
+    Ttrpc(#[from] TtrpcStatus),
     /// Requested item is not found
     #[error("not found: {0}")]
     NotFound(String),
@@ -52,43 +51,22 @@ pub enum Error {
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;
 
-impl From<Error> for ttrpc::Error {
+impl From<Error> for TtrpcStatus {
     fn from(e: Error) -> Self {
         match e {
-            Error::Shim(ref s) => match s {
-                ShimError::InvalidArgument(s) => {
-                    ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INVALID_ARGUMENT, s))
-                }
-                ShimError::NotFoundError(s) => {
-                    ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::NOT_FOUND, s))
-                }
-                _ => ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, s)),
-            },
-            Error::NotFound(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::NOT_FOUND, s))
-            }
-            Error::AlreadyExists(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::ALREADY_EXISTS, s))
-            }
-            Error::InvalidArgument(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::INVALID_ARGUMENT, s))
-            }
-            Error::FailedPrecondition(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::FAILED_PRECONDITION, s))
-            }
-            Error::Oci(ref _s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, e.to_string()))
-            }
-            Error::Any(ref s) => {
-                ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::UNKNOWN, s))
-            }
-            _ => ttrpc::Error::Others(e.to_string()),
+            Error::Ttrpc(s) => s,
+            Error::NotFound(s) => TtrpcStatus::not_found(s),
+            Error::AlreadyExists(s) => TtrpcStatus::already_exists(s),
+            Error::InvalidArgument(s) => TtrpcStatus::invalid_argument(s),
+            Error::FailedPrecondition(s) => TtrpcStatus::failed_precondition(s),
+            e => TtrpcStatus::unknown(e.to_string()),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use shimkit::types::Code;
     use thiserror::Error;
 
     use super::*;
@@ -102,63 +80,33 @@ mod tests {
     #[test]
     fn test_error_to_ttrpc_status() {
         let e = Error::InvalidArgument("invalid argument".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::INVALID_ARGUMENT);
-                assert_eq!(s.message, "invalid argument");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::InvalidArgument);
+        assert_eq!(s.message, "invalid argument");
 
         let e = Error::NotFound("not found".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::NOT_FOUND);
-                assert_eq!(s.message, "not found");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::NotFound);
+        assert_eq!(s.message, "not found");
 
         let e = Error::AlreadyExists("already exists".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::ALREADY_EXISTS);
-                assert_eq!(s.message, "already exists");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::AlreadyExists);
+        assert_eq!(s.message, "already exists");
 
         let e = Error::FailedPrecondition("failed precondition".to_string());
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::FAILED_PRECONDITION);
-                assert_eq!(s.message, "failed precondition");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::FailedPrecondition);
+        assert_eq!(s.message, "failed precondition");
 
-        let e = Error::Shim(ShimError::InvalidArgument("invalid argument".to_string()));
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::INVALID_ARGUMENT);
-                assert_eq!(s.message, "invalid argument");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let e = Error::Ttrpc(TtrpcStatus::invalid_argument("invalid argument"));
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::InvalidArgument);
+        assert_eq!(s.message, "invalid argument");
 
         let e = Error::Any(AnyError::new(TestError::AnError("any error".to_string())));
-        let t: ttrpc::Error = e.into();
-        match t {
-            ttrpc::Error::RpcStatus(s) => {
-                assert_eq!(s.code(), ttrpc::Code::UNKNOWN);
-                assert_eq!(s.message, "any error");
-            }
-            _ => panic!("unexpected error"),
-        }
+        let s: TtrpcStatus = e.into();
+        assert_eq!(s.code(), Code::Unknown);
+        assert_eq!(s.message, "any error");
     }
 }

@@ -1,7 +1,7 @@
+use std::fs::File;
 use std::marker::PhantomData;
+use std::os::fd::{FromRawFd as _, RawFd};
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -9,13 +9,12 @@ use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::container::Container;
 use libcontainer::signal::Signal;
 use libcontainer::syscall::syscall::SyscallType;
-use nix::errno::Errno;
 use nix::sys::wait::{waitid, Id as WaitID, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use oci_spec::image::Platform;
+use tokio::io::unix::AsyncFd;
 
 use crate::container::Engine;
-use crate::sandbox::async_utils::AmbientRuntime as _;
 use crate::sandbox::instance_utils::{determine_rootdir, get_instance_root, instance_exists};
 use crate::sandbox::sync::WaitableCell;
 use crate::sandbox::{
@@ -36,7 +35,10 @@ impl<E: Engine> SandboxInstance for Instance<E> {
     type Engine = E;
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn new(id: String, cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, SandboxError> {
+    async fn new(
+        id: String,
+        cfg: Option<&InstanceConfig<Self::Engine>>,
+    ) -> Result<Self, SandboxError> {
         let cfg = cfg.context("missing configuration")?;
         let engine = cfg.get_engine();
         let bundle = cfg.get_bundle().to_path_buf();
@@ -46,9 +48,9 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         let stdio = Stdio::init_from_cfg(cfg)?;
 
         // check if container is OCI image with wasm layers and attempt to read the module
-        let (modules, platform) = containerd::Client::connect(cfg.get_containerd_address().as_str(), &namespace).block_on()?
+        let (modules, platform) = containerd::Client::connect(cfg.get_containerd_address().as_str(), &namespace).await?
             .load_modules(&id, &engine)
-            .block_on()
+            .await
             .unwrap_or_else(|e| {
                 log::warn!("Error obtaining wasm layers for container {id}.  Will attempt to use files inside container image. Error: {e}");
                 (vec![], Platform::default())
@@ -82,27 +84,31 @@ impl<E: Engine> SandboxInstance for Instance<E> {
         let mut container = Container::load(container_root)?;
         let pid = container.pid().context("failed to get pid")?.as_raw();
 
+        // Use a pidfd FD so that we can wait for the process to exit asynchronously.
+        let pidfd = PidFd::new(&Pid::from_raw(pid))?;
+
         container.start()?;
 
         let exit_code = self.exit_code.clone();
-        thread::spawn(move || {
+
+        tokio::spawn(async move {
             // move the exit code guard into this thread
             let _guard = guard;
 
-            let status = match waitid(WaitID::Pid(Pid::from_raw(pid)), WaitPidFlag::WEXITED) {
+            let status = match pidfd.wait().await {
                 Ok(WaitStatus::Exited(_, status)) => status,
                 Ok(WaitStatus::Signaled(_, sig, _)) => sig as i32,
-                Ok(_) => 0,
-                Err(Errno::ECHILD) => {
-                    log::info!("no child process");
-                    0
+                Ok(res) => {
+                    log::error!("waitpid unexpected result: {res:?}");
+                    137
                 }
                 Err(e) => {
                     log::error!("waitpid failed: {e}");
                     137
                 }
-            } as u32;
-            let _ = exit_code.set((status, Utc::now()));
+            };
+
+            let _ = exit_code.set((status as u32, Utc::now()));
         });
 
         Ok(pid as u32)
@@ -152,8 +158,32 @@ impl<E: Engine> SandboxInstance for Instance<E> {
     /// Waits for the instance to finish and returns its exit code
     /// Returns None if the timeout is reached before the instance has finished.
     /// This is a blocking call.
-    #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip(self, t), level = "Info"))]
-    fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)> {
-        self.exit_code.wait_timeout(t).copied()
+    #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip(self), level = "Info"))]
+    async fn wait(&self) -> (u32, DateTime<Utc>) {
+        *self.exit_code.wait().await
+    }
+}
+
+struct PidFd {
+    pid: Pid,
+    fd: AsyncFd<File>,
+}
+
+impl PidFd {
+    fn new(pid: &Pid) -> anyhow::Result<Self> {
+        use libc::{syscall, SYS_pidfd_open, PIDFD_NONBLOCK};
+        let pidfd = unsafe { syscall(SYS_pidfd_open, pid.as_raw(), PIDFD_NONBLOCK) };
+        if pidfd == -1 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let fd = AsyncFd::new(unsafe { File::from_raw_fd(pidfd as RawFd) })?;
+        Ok(Self { pid: *pid, fd })
+    }
+
+    async fn wait(self) -> std::io::Result<WaitStatus> {
+        let _ = self.fd.readable().await?;
+        let pid = WaitID::Pid(self.pid);
+        let status = waitid(pid, WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG)?;
+        Ok(status)
     }
 }

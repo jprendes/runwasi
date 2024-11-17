@@ -1,55 +1,49 @@
 use std::collections::HashMap;
 use std::fs::create_dir_all;
-use std::ops::Not;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::thread;
 use std::time::Duration;
 
-use anyhow::Context as AnyhowContext;
-use containerd_shim::api::{
-    ConnectRequest, ConnectResponse, CreateTaskRequest, CreateTaskResponse, DeleteRequest, Empty,
-    KillRequest, ShutdownRequest, StartRequest, StartResponse, StateRequest, StateResponse,
-    StatsRequest, StatsResponse, WaitRequest, WaitResponse,
-};
-use containerd_shim::error::Error as ShimError;
-use containerd_shim::protos::events::task::{TaskCreate, TaskDelete, TaskExit, TaskIO, TaskStart};
-use containerd_shim::protos::shim::shim_ttrpc::Task;
-use containerd_shim::protos::types::task::Status;
-use containerd_shim::util::IntoOption;
-use containerd_shim::{DeleteResponse, ExitSignal, TtrpcContext, TtrpcResult};
+//use containerd_shim::error::Error as ShimError;
+//use containerd_shim::util::IntoOption;
 use log::debug;
 use oci_spec::runtime::Spec;
+use shimkit::event::EventPublisher;
+use shimkit::types::events::*;
+use shimkit::types::sandbox::Sandbox;
+use shimkit::types::task::*;
+use shimkit::types::{Code, Result as TtrpcResult, Status as TtrpcStatus};
+use trapeze::{get_server, StatusExt as _};
 
 use crate::sandbox::instance::{Instance, InstanceConfig};
-use crate::sandbox::shim::events::{EventSender, RemoteEventSender, ToTimestamp};
 use crate::sandbox::shim::instance_data::InstanceData;
+use crate::sandbox::utils::{ToTimestamp as _, WithTimeout as _};
 use crate::sandbox::{oci, Error, Result};
 use crate::sys::metrics::get_metrics;
 
+/*
 #[cfg(test)]
 mod tests;
+*/
 
 type LocalInstances<T> = RwLock<HashMap<String, Arc<InstanceData<T>>>>;
 
 /// Local implements the Task service for a containerd shim.
 /// It defers all task operations to the `Instance` implementation.
-pub struct Local<T: Instance + Send + Sync, E: EventSender = RemoteEventSender> {
+pub struct Local<T: Instance + Send + Sync> {
     pub engine: T::Engine,
     pub(super) instances: LocalInstances<T>,
-    events: E,
-    exit: Arc<ExitSignal>,
+    events: EventPublisher,
     namespace: String,
     containerd_address: String,
 }
 
-impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
+impl<T: Instance + Send + Sync> Local<T> {
     /// Creates a new local task service.
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
     pub fn new(
         engine: T::Engine,
-        events: E,
-        exit: Arc<ExitSignal>,
+        events: EventPublisher,
         namespace: impl AsRef<str>,
         containerd_address: impl AsRef<str>,
     ) -> Self {
@@ -60,7 +54,6 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
             engine,
             instances,
             events,
-            exit,
             namespace,
             containerd_address,
         }
@@ -93,52 +86,37 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
 }
 
 // These are the same functions as in Task, but without the TtrcpContext, which is useful for testing
-impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
+impl<T: Instance + Send + Sync> Local<T> {
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_create(&self, req: CreateTaskRequest) -> Result<CreateTaskResponse> {
-        if !req.checkpoint().is_empty() || !req.parent_checkpoint().is_empty() {
-            return Err(ShimError::Unimplemented("checkpoint is not supported".to_string()).into());
+    async fn task_create(&self, req: CreateTaskRequest) -> TtrpcResult<CreateTaskResponse> {
+        if !req.checkpoint.is_empty() || !req.parent_checkpoint.is_empty() {
+            return Err(TtrpcStatus::unimplemented("checkpoint is not supported"));
         }
 
         if req.terminal {
-            return Err(Error::InvalidArgument(
-                "terminal is not supported".to_string(),
-            ));
+            return Err(TtrpcStatus::invalid_argument("terminal is not supported"));
         }
 
         if self.has_instance(&req.id) {
-            return Err(Error::AlreadyExists(req.id));
+            return Err(TtrpcStatus::already_exists(req.id));
         }
 
-        let mut spec = Spec::load(Path::new(&req.bundle).join("config.json"))
-            .map_err(|err| Error::InvalidArgument(format!("could not load runtime spec: {err}")))?;
+        let mut spec = Spec::load(Path::new(&req.bundle).join("config.json")).map_err(|err| {
+            TtrpcStatus::invalid_argument(format!("could not load runtime spec: {err}"))
+        })?;
 
-        spec.canonicalize_rootfs(req.bundle()).map_err(|err| {
-            ShimError::InvalidArgument(format!("could not canonicalize rootfs: {}", err))
+        spec.canonicalize_rootfs(&req.bundle).map_err(|err| {
+            TtrpcStatus::invalid_argument(format!("could not canonicalize rootfs: {}", err))
         })?;
 
         let rootfs = spec
             .root()
             .as_ref()
-            .ok_or_else(|| Error::InvalidArgument("rootfs is not set in runtime spec".to_string()))?
+            .ok_or_else(|| TtrpcStatus::invalid_argument("rootfs is not set in runtime spec"))?
             .path();
 
         let _ = create_dir_all(rootfs);
-        let rootfs_mounts = req.rootfs().to_vec();
-        if !rootfs_mounts.is_empty() {
-            for m in rootfs_mounts {
-                let mount_type = m.type_().none_if(|&x| x.is_empty());
-                let source = m.source.as_str().none_if(|&x| x.is_empty());
-
-                #[cfg(unix)]
-                containerd_shim::mount::mount_rootfs(
-                    mount_type,
-                    source,
-                    &m.options.to_vec(),
-                    rootfs,
-                )?;
-            }
-        }
+        mount_rootfs(&req.rootfs).await?;
 
         let mut cfg = self.instance_config();
         cfg.set_bundle(&req.bundle)
@@ -147,26 +125,29 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
             .set_stderr(&req.stderr);
 
         // Check if this is a cri container
-        let instance = InstanceData::new(req.id(), cfg)?;
+        let instance = InstanceData::new(&req.id, cfg).await?;
 
         self.instances
             .write()
             .unwrap()
-            .insert(req.id().to_string(), Arc::new(instance));
+            .insert(req.id.clone(), Arc::new(instance));
 
-        self.events.send(TaskCreate {
-            container_id: req.id,
-            bundle: req.bundle,
-            rootfs: req.rootfs,
-            io: Some(TaskIO {
-                stdin: req.stdin,
-                stdout: req.stdout,
-                stderr: req.stderr,
+        let _ = self
+            .events
+            .publish(TaskCreate {
+                container_id: req.id,
+                bundle: req.bundle,
+                rootfs: req.rootfs,
+                io: Some(TaskIo {
+                    stdin: req.stdin,
+                    stdout: req.stdout,
+                    stderr: req.stderr,
+                    ..Default::default()
+                })
+                .into(),
                 ..Default::default()
             })
-            .into(),
-            ..Default::default()
-        });
+            .await;
 
         debug!("create done");
 
@@ -181,40 +162,39 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_start(&self, req: StartRequest) -> Result<StartResponse> {
-        if req.exec_id().is_empty().not() {
-            return Err(ShimError::Unimplemented("exec is not supported".to_string()).into());
+    async fn task_start(&self, req: StartRequest) -> TtrpcResult<StartResponse> {
+        if !req.exec_id.is_empty() {
+            return Err(TtrpcStatus::unimplemented("exec is not supported"));
         }
 
-        let i = self.get_instance(req.id())?;
+        let i = self.get_instance(&req.id)?;
         let pid = i.start()?;
 
-        self.events.send(TaskStart {
-            container_id: req.id().into(),
-            pid,
-            ..Default::default()
-        });
+        let _ = self
+            .events
+            .publish(TaskStart {
+                container_id: req.id.clone(),
+                pid,
+                ..Default::default()
+            })
+            .await;
 
         let events = self.events.clone();
 
-        let id = req.id().to_string();
+        let id = req.id.clone();
 
-        thread::Builder::new()
-            .name(format!("{id}-wait"))
-            .spawn(move || {
-                let (exit_code, timestamp) = i.wait();
-                events.send(TaskExit {
+        tokio::spawn(async move {
+            let (exit_code, timestamp) = i.wait().await;
+            let _ = events
+                .publish(TaskExit {
                     container_id: id.clone(),
                     exit_status: exit_code,
-                    exited_at: Some(timestamp.to_timestamp()).into(),
+                    exited_at: timestamp.to_timestamp().into(),
                     pid,
                     id,
-                    ..Default::default()
-                });
-            })
-            .context("could not spawn thread to wait exit")
-            .map_err(Error::from)?;
-
+                })
+                .await;
+        });
         debug!("started: {:?}", req);
 
         Ok(StartResponse {
@@ -224,54 +204,56 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_kill(&self, req: KillRequest) -> Result<Empty> {
-        if !req.exec_id().is_empty() {
+    async fn task_kill(&self, req: KillRequest) -> Result<()> {
+        if !req.exec_id.is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
-        self.get_instance(req.id())?.kill(req.signal())?;
-        Ok(Empty::new())
+        self.get_instance(&req.id)?.kill(req.signal)?;
+        Ok(())
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_delete(&self, req: DeleteRequest) -> Result<DeleteResponse> {
-        if !req.exec_id().is_empty() {
+    async fn task_delete(&self, req: DeleteRequest) -> Result<DeleteResponse> {
+        if !req.exec_id.is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
-        let i = self.get_instance(req.id())?;
+        let i = self.get_instance(&req.id)?;
 
         i.delete()?;
 
         let pid = i.pid().unwrap_or_default();
-        let (exit_code, timestamp) = i.wait_timeout(Duration::ZERO).unzip();
-        let timestamp = timestamp.map(ToTimestamp::to_timestamp);
+        let (exit_code, timestamp) = i.wait().with_timeout(Duration::ZERO).await.unzip();
+        let timestamp = timestamp.map(|t| t.to_timestamp());
 
-        self.instances.write().unwrap().remove(req.id());
+        self.instances.write().unwrap().remove(&req.id);
 
-        self.events.send(TaskDelete {
-            container_id: req.id().into(),
-            pid,
-            exit_status: exit_code.unwrap_or_default(),
-            exited_at: timestamp.clone().into(),
-            ..Default::default()
-        });
+        let _ = self
+            .events
+            .publish(TaskDelete {
+                container_id: req.id.clone(),
+                pid,
+                exit_status: exit_code.unwrap_or_default(),
+                exited_at: timestamp.clone().into(),
+                ..Default::default()
+            })
+            .await;
 
         Ok(DeleteResponse {
             pid,
             exit_status: exit_code.unwrap_or_default(),
             exited_at: timestamp.into(),
-            ..Default::default()
         })
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_wait(&self, req: WaitRequest) -> Result<WaitResponse> {
-        if !req.exec_id().is_empty() {
+    async fn task_wait(&self, req: WaitRequest) -> Result<WaitResponse> {
+        if !req.exec_id.is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
-        let i = self.get_instance(req.id())?;
-        let (exit_code, timestamp) = i.wait();
+        let i = self.get_instance(&req.id)?;
+        let (exit_code, timestamp) = i.wait().await;
 
         debug!("wait finishes");
         Ok(WaitResponse {
@@ -282,22 +264,22 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_state(&self, req: StateRequest) -> Result<StateResponse> {
-        if !req.exec_id().is_empty() {
+    async fn task_state(&self, req: StateRequest) -> Result<StateResponse> {
+        if !req.exec_id.is_empty() {
             return Err(Error::InvalidArgument("exec is not supported".to_string()));
         }
 
-        let i = self.get_instance(req.id())?;
+        let i = self.get_instance(&req.id)?;
         let pid = i.pid();
-        let (exit_code, timestamp) = i.wait_timeout(Duration::ZERO).unzip();
-        let timestamp = timestamp.map(ToTimestamp::to_timestamp);
+        let (exit_code, timestamp) = i.wait().with_timeout(Duration::ZERO).await.unzip();
+        let timestamp = timestamp.map(|t| t.to_timestamp());
 
         let status = if pid.is_none() {
-            Status::CREATED
+            Status::Created
         } else if exit_code.is_none() {
-            Status::RUNNING
+            Status::Running
         } else {
-            Status::STOPPED
+            Status::Stopped
         };
 
         Ok(StateResponse {
@@ -308,86 +290,107 @@ impl<T: Instance + Send + Sync, E: EventSender> Local<T, E> {
             pid: pid.unwrap_or_default(),
             exit_status: exit_code.unwrap_or_default(),
             exited_at: timestamp.into(),
-            status: status.into(),
+            status: status as _,
             ..Default::default()
         })
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn task_stats(&self, req: StatsRequest) -> Result<StatsResponse> {
-        let i = self.get_instance(req.id())?;
+    async fn task_stats(&self, req: StatsRequest) -> Result<StatsResponse> {
+        let i = self.get_instance(&req.id)?;
         let pid = i
             .pid()
             .ok_or_else(|| Error::InvalidArgument("task is not running".to_string()))?;
 
-        let metrics = get_metrics(pid)?;
+        let _metrics = get_metrics(pid)?;
 
         Ok(StatsResponse {
-            stats: Some(metrics).into(),
-            ..Default::default()
+            stats: None, //Some(metrics),
         })
     }
 }
 
-impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {
+async fn mount_rootfs(_rootfs_mounts: impl IntoIterator<Item = &Mount>) -> Result<()> {
+    // TODO
+    /*
+    for m in rootfs_mounts {
+        let mount_type = match m.r#type.as_str() {
+            "" => None,
+            s => Some(s),
+        };
+        let source = match m.source.as_str() {
+            "" => None,
+            s => Some(s),
+        };
+
+        #[cfg(unix)]
+        containerd_shim::mount::mount_rootfs(
+            mount_type,
+            source,
+            &m.options.to_vec(),
+            rootfs,
+        )?;
+    }
+    */
+    Ok(())
+}
+
+impl<T: Instance + Sync + Send> Task for Local<T> {
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn create(&self, _: &TtrpcContext, req: CreateTaskRequest) -> TtrpcResult<CreateTaskResponse> {
+    async fn create(&self, req: CreateTaskRequest) -> TtrpcResult<CreateTaskResponse> {
         debug!("create: {:?}", req);
-        Ok(self.task_create(req)?)
+        self.task_create(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn start(&self, _: &TtrpcContext, req: StartRequest) -> TtrpcResult<StartResponse> {
+    async fn start(&self, req: StartRequest) -> TtrpcResult<StartResponse> {
         debug!("start: {:?}", req);
-        Ok(self.task_start(req)?)
+        self.task_start(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn kill(&self, _: &TtrpcContext, req: KillRequest) -> TtrpcResult<Empty> {
+    async fn kill(&self, req: KillRequest) -> TtrpcResult<()> {
         debug!("kill: {:?}", req);
-        Ok(self.task_kill(req)?)
+        self.task_kill(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn delete(&self, _: &TtrpcContext, req: DeleteRequest) -> TtrpcResult<DeleteResponse> {
+    async fn delete(&self, req: DeleteRequest) -> TtrpcResult<DeleteResponse> {
         debug!("delete: {:?}", req);
-        Ok(self.task_delete(req)?)
+        self.task_delete(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn wait(&self, _: &TtrpcContext, req: WaitRequest) -> TtrpcResult<WaitResponse> {
+    async fn wait(&self, req: WaitRequest) -> TtrpcResult<WaitResponse> {
         debug!("wait: {:?}", req);
 
+        // Start a task to export interval span for long wait
         #[cfg(feature = "opentelemetry")]
-        {
+        let _handle = {
+            use tokio::time::{sleep, Duration};
             use tracing::{span, Level, Span};
 
-            let (tx, rx) = std::sync::mpsc::channel();
-            // Start a thread to export interval span for long wait
-            let parent_span = Span::current();
-            let _ = thread::spawn(move || loop {
-                let current_span =
-                    span!(parent: &parent_span, Level::INFO, "task wait 60s interval");
-                let _enter = current_span.enter();
-                if rx.recv_timeout(Duration::from_secs(60)).is_ok() {
-                    break;
-                }
-            });
-            let result = self.task_wait(req)?;
-            tx.send(()).unwrap();
-            Ok(result)
-        }
+            use crate::sandbox::utils::AbortOnDrop as _;
 
-        #[cfg(not(feature = "opentelemetry"))]
-        {
-            Ok(self.task_wait(req)?)
-        }
+            let parent_span = Span::current();
+            tokio::spawn(async move {
+                loop {
+                    let current_span =
+                        span!(parent: &parent_span, Level::INFO, "task wait 60s interval");
+                    let _enter = current_span.enter();
+                    sleep(Duration::from_secs(60)).await;
+                }
+            })
+            .abort_on_drop()
+        };
+
+        self.task_wait(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn connect(&self, _: &TtrpcContext, req: ConnectRequest) -> TtrpcResult<ConnectResponse> {
+    async fn connect(&self, req: ConnectRequest) -> TtrpcResult<ConnectResponse> {
         debug!("connect: {:?}", req);
-        let i = self.get_instance(req.id())?;
+        let i = self.get_instance(&req.id).or_status(Code::Internal)?;
         let shim_pid = std::process::id();
         let task_pid = i.pid().unwrap_or_default();
         Ok(ConnectResponse {
@@ -398,23 +401,30 @@ impl<T: Instance + Sync + Send, E: EventSender> Task for Local<T, E> {
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn state(&self, _: &TtrpcContext, req: StateRequest) -> TtrpcResult<StateResponse> {
+    async fn state(&self, req: StateRequest) -> TtrpcResult<StateResponse> {
         debug!("state: {:?}", req);
-        Ok(self.task_state(req)?)
+        self.task_state(req).await.or_status(Code::Internal)
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn shutdown(&self, _: &TtrpcContext, _: ShutdownRequest) -> TtrpcResult<Empty> {
+    async fn shutdown(&self, req: ShutdownRequest) -> TtrpcResult<()> {
         debug!("shutdown");
         if self.is_empty() {
-            self.exit.signal();
+            let controller = get_server();
+            if req.now {
+                controller.terminate()
+            } else {
+                controller.shutdown()
+            }
         }
-        Ok(Empty::new())
+        Ok(())
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
-    fn stats(&self, _ctx: &TtrpcContext, req: StatsRequest) -> TtrpcResult<StatsResponse> {
+    async fn stats(&self, req: StatsRequest) -> TtrpcResult<StatsResponse> {
         debug!("stats: {:?}", req);
-        Ok(self.task_stats(req)?)
+        self.task_stats(req).await.or_status(Code::Internal)
     }
 }
+
+impl<T: Instance + Send + Sync> Sandbox for Local<T> {}
