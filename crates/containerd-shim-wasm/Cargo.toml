@@ -34,6 +34,11 @@ futures = { version = "0.3.30" }
 wasmparser = { version = "0.220.0" }
 tokio-stream = { version = "0.1" }
 sha256 = { workspace = true }
+os_pipe = "1"
+clone3 = { version = "0.2", default-features = false }
+byteorder = "1"
+serde_bytes = "0.11"
+rmp-serde = "1"
 
 # tracing
 # note: it's important to keep the version of tracing in sync with tracing-subscriber

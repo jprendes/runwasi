@@ -11,9 +11,10 @@ use oci_spec::image::Descriptor;
 
 use super::error::Result;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WasmLayer {
     pub config: Descriptor,
+    #[serde(with = "serde_bytes")]
     pub layer: Vec<u8>,
 }
 

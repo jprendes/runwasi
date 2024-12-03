@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use containerd_shim::{parse, run, Config};
 
+use crate::container::Engine;
 #[cfg(feature = "opentelemetry")]
 use crate::sandbox::shim::{otel_traces_enabled, OtlpConfig};
 use crate::sandbox::{Instance, ShimCli};
@@ -45,8 +46,11 @@ pub fn shim_main<'a, I>(
     config: Option<Config>,
 ) where
     I: 'static + Instance + Sync + Send,
-    I::Engine: Default,
+    I::Engine: Engine + Default,
 {
+    #[cfg(unix)]
+    crate::sys::zygote::Zygote::global();
+
     #[cfg(feature = "opentelemetry")]
     if otel_traces_enabled() {
         // opentelemetry uses tokio, so we need to initialize a runtime

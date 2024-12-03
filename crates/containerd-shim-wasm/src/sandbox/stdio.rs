@@ -91,7 +91,7 @@ impl<const FD: StdioRawFd> StdioStream<FD> {
 }
 
 impl<const FD: StdioRawFd> StdioStream<FD> {
-    fn try_from_path(path: impl AsRef<Path>) -> Result<Self> {
+    pub(crate) fn try_from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
             return Ok(Self(Arc::default()));

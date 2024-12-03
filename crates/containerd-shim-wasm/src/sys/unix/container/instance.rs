@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -14,17 +14,21 @@ use nix::errno::Errno;
 use nix::sys::wait::{waitid, Id as WaitID, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use oci_spec::image::Platform;
+use serde::{Deserialize, Serialize};
 
 use crate::container::Engine;
 use crate::sandbox::async_utils::AmbientRuntime as _;
 use crate::sandbox::instance_utils::determine_rootdir;
+use crate::sandbox::stdio::{Stderr, Stdin, Stdout};
 use crate::sandbox::sync::WaitableCell;
 use crate::sandbox::{
     containerd, Error as SandboxError, Instance as SandboxInstance, InstanceConfig, Stdio,
+    WasmLayer,
 };
 use crate::sys::container::executor::Executor;
+use crate::sys::zygote::Zygote;
 
-static DEFAULT_CONTAINER_ROOT_DIR: &str = "/run/containerd";
+const DEFAULT_CONTAINER_ROOT_DIR: &str = "/run/containerd";
 
 pub struct Instance<E: Engine> {
     exit_code: WaitableCell<(u32, DateTime<Utc>)>,
@@ -33,21 +37,17 @@ pub struct Instance<E: Engine> {
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine> SandboxInstance for Instance<E> {
+impl<E: Engine + Default> SandboxInstance for Instance<E> {
     type Engine = E;
 
     #[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
     fn new(id: String, cfg: Option<&InstanceConfig<Self::Engine>>) -> Result<Self, SandboxError> {
         let cfg = cfg.context("missing configuration")?;
         let engine = cfg.get_engine();
-        let bundle = cfg.get_bundle().to_path_buf();
         let namespace = cfg.get_namespace();
-        let rootdir = Path::new(DEFAULT_CONTAINER_ROOT_DIR).join(E::name());
-        let rootdir = determine_rootdir(&bundle, &namespace, rootdir)?;
-        let stdio = Stdio::init_from_cfg(cfg)?;
 
         // check if container is OCI image with wasm layers and attempt to read the module
-        let (modules, platform) = containerd::Client::connect(cfg.get_containerd_address().as_str(), &namespace).block_on()?
+        let (modules, platform) = containerd::Client::connect(cfg.get_containerd_address(), &namespace).block_on()?
             .load_modules(&id, &engine)
             .block_on()
             .unwrap_or_else(|e| {
@@ -55,12 +55,22 @@ impl<E: Engine> SandboxInstance for Instance<E> {
                 (vec![], Platform::default())
             });
 
-        let container = ContainerBuilder::new(id.clone(), SyscallType::Linux)
-            .with_executor(Executor::new(engine, stdio, modules, platform))
-            .with_root_path(rootdir.clone())?
-            .as_init(&bundle)
-            .with_systemd(false)
-            .build()?;
+        let use_zygote = std::env::var("USE_ZYGOTE").unwrap_or_default();
+        let container = if use_zygote != "0" {
+            build_container::<Self::Engine>(&id, cfg, platform, modules)?
+        } else {
+            let bundle = cfg.get_bundle().to_path_buf();
+            let rootdir = Path::new(DEFAULT_CONTAINER_ROOT_DIR).join(E::name());
+            let rootdir = determine_rootdir(&bundle, &namespace, rootdir)?;
+            let stdio = Stdio::init_from_cfg(cfg)?;
+
+            ContainerBuilder::new(id.clone(), SyscallType::Linux)
+                .with_executor(Executor::new(engine, stdio, modules, platform))
+                .with_root_path(rootdir.clone())?
+                .as_init(&bundle)
+                .with_systemd(false)
+                .build()?
+        };
 
         Ok(Self {
             id,
@@ -143,4 +153,76 @@ impl<E: Engine> SandboxInstance for Instance<E> {
     fn wait_timeout(&self, t: impl Into<Option<Duration>>) -> Option<(u32, DateTime<Utc>)> {
         self.exit_code.wait_timeout(t).copied()
     }
+}
+
+fn build_container<E: Engine + Default>(
+    id: impl Into<String>,
+    cfg: &InstanceConfig<E>,
+    platform: Platform,
+    modules: Vec<WasmLayer>,
+) -> anyhow::Result<Container> {
+    let id = id.into();
+    let bundle = cfg.get_bundle().to_path_buf();
+    let namespace = cfg.get_namespace();
+    let rootdir = Path::new(DEFAULT_CONTAINER_ROOT_DIR).join(E::name());
+    let rootdir = determine_rootdir(&bundle, &namespace, rootdir)?;
+
+    Zygote::global().run(
+        create_container::<E>,
+        &CreateContainerArgs {
+            id: id.clone(),
+            platform,
+            modules,
+            stdin: cfg.get_stdin().to_path_buf(),
+            stdout: cfg.get_stdout().to_path_buf(),
+            stderr: cfg.get_stderr().to_path_buf(),
+            rootdir: rootdir.clone(),
+            bundle,
+        },
+    )?;
+
+    let container = Container::load(rootdir.join(id))?;
+
+    Ok(container)
+}
+
+#[derive(Serialize, Deserialize)]
+struct CreateContainerArgs {
+    id: String,
+    platform: Platform,
+    modules: Vec<WasmLayer>,
+    stdin: PathBuf,
+    stdout: PathBuf,
+    stderr: PathBuf,
+    bundle: PathBuf,
+    rootdir: PathBuf,
+}
+
+fn create_container<E: Engine + Default>(args: CreateContainerArgs) -> anyhow::Result<()> {
+    let CreateContainerArgs {
+        id,
+        platform,
+        modules,
+        stdin,
+        stdout,
+        stderr,
+        rootdir,
+        bundle,
+    } = args;
+
+    let stdio = Stdio {
+        stdin: Stdin::try_from_path(stdin)?,
+        stdout: Stdout::try_from_path(stdout)?,
+        stderr: Stderr::try_from_path(stderr)?,
+    };
+
+    let engine = E::default();
+    ContainerBuilder::new(id, SyscallType::Linux)
+        .with_executor(Executor::new(engine, stdio, modules, platform))
+        .with_root_path(rootdir)?
+        .as_init(&bundle)
+        .with_systemd(false)
+        .build()?;
+
+    Ok(())
 }
