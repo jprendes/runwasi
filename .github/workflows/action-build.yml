@@ -65,8 +65,13 @@ jobs:
         timeout-minutes: 5
         run: |
           make test-${{ inputs.runtime }}
-          make test/stress-${{ inputs.runtime }}
         if: ${{ inputs.arch == 'x86_64' }}
+      - name: Run stress tests
+        if: ${{ inputs.runtime != 'common' }}
+        timeout-minutes: 5
+        run: |
+          make dist-${{ inputs.runtime }}
+          make test/stress-${{ inputs.runtime }}
       - name: Sign the binary
         if: ${{ inputs.runtime != 'common' && inputs.slug != 'windows' && inputs.sign }}
         uses: ./.github/actions/sign
