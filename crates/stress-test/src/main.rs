@@ -58,6 +58,9 @@ async fn main() -> Result<()> {
     set_child_subreaper(true)?;
     let res = main_impl().await;
     let _ = reap_children().await?;
+    if let Err(err) = &res {
+        eprintln!("{err:?}");
+    }
     res
 }
 

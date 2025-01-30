@@ -27,10 +27,12 @@ impl Containerd {
         let dir = tempdir()?;
         let socket = dir.path().join("containerd.sock.ttrpc");
 
+        println!("Binding to {:?}", format!("unix://{}", socket.display()));
         let _server = Server::new()
             .register(service!(EventsService: Events))
             .bind(format!("unix://{}", socket.display()))
             .await?;
+        println!("Binding done!");
 
         Ok(Self {
             dir,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -40,6 +41,8 @@ impl Shim {
         }
 
         info!("Starting shim");
+
+        println!("{:#?}", std::env::vars().collect::<HashMap<_, _>>());
 
         let hash = hash(dir.path());
         let output = Command::new(binary.as_ref())
