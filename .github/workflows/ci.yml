@@ -14,6 +14,7 @@ on:
       - 'MAINTAINERS'
       - 'NOTICE'
       - 'art/**'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
