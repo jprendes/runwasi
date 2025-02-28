@@ -1,9 +1,90 @@
+//! Command line interface for the containerd shim.
+//!
+//! The CLI provides the interface between containerd and the Wasm runtime.
+//! It handles commands like start and delete from containerd's shim API.
+//!
+//! ## Usage
+//!
+//! The shim binary should be named `containerd-shim-<engine>-v1` and installed in $PATH.
+//! containerd will call the shim with various commands.
+//!
+//! ## Configuration
+//!
+//! The shim can be configured using the [`Config`] struct:
+//!
+//! ```rust, no_run
+//! use containerd_shim_wasm::Config;
+//!
+//! let config = Config {
+//!     // Disable automatic logger setup
+//!     no_setup_logger: false,
+//!     // Set default log level
+//!     default_log_level: "info".to_string(),
+//!     // Disable child process reaping
+//!     no_reaper: false,
+//!     // Disable subreaper setting
+//!     no_sub_reaper: false,
+//! };
+//! ```
+//!
+//! ## Version Information
+//!
+//! The module provides two macros for version information:
+//!
+//! - [`version!()`] - Returns the crate version from Cargo.toml
+//! - [`revision!()`] - Returns the Git revision hash, if available
+//!
+//! ## Example usage:
+//!
+//! ```rust, no_run
+//! use containerd_shim_wasm::{
+//!     container::{Instance, Engine, RuntimeContext},
+//!     sandbox::cli::{revision, shim_main, version},
+//!     Config,
+//! };
+//! use anyhow::Result;
+//!
+//! #[derive(Clone, Default)]
+//! struct MyEngine;
+//!
+//! impl Engine for MyEngine {
+//!     fn name() -> &'static str {
+//!         "my-engine"
+//!     }
+//!
+//!     fn run_wasi(&self, ctx: &impl RuntimeContext) -> Result<i32> {
+//!         Ok(0)
+//!     }
+//! }
+//!
+//! let config = Config {
+//!     default_log_level: "error".to_string(),
+//!     ..Default::default()
+//! };
+//!
+//! shim_main::<Instance<MyEngine>>(
+//!     "my-engine",
+//!     version!(),
+//!     revision!(),
+//!     "v1",
+//!     Some(config),
+//! );
+//! ```
+//!
+//! When the `opentelemetry` feature is enabled, additional runtime config
+//! is available through environment variables:
+//!
+//! - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Enable OpenTelemetry tracing
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT`: Enable OpenTelemetry tracing as above
+//! - `OTEL_SDK_DISABLED`: Disable OpenTelemetry SDK
+//!
+
 use std::path::PathBuf;
 
-use containerd_shim::{parse, run, Config};
+use containerd_shim::{Config, parse, run};
 
 #[cfg(feature = "opentelemetry")]
-use crate::sandbox::shim::{otel_traces_enabled, OtlpConfig};
+use crate::sandbox::shim::{OtlpConfig, otel_traces_enabled};
 use crate::sandbox::{Instance, ShimCli};
 
 pub mod r#impl {
@@ -12,6 +93,7 @@ pub mod r#impl {
 
 pub use crate::{revision, version};
 
+/// Get the crate version from Cargo.toml.
 #[macro_export]
 macro_rules! version {
     () => {
@@ -19,6 +101,7 @@ macro_rules! version {
     };
 }
 
+/// Get the Git revision hash, if available.
 #[macro_export]
 macro_rules! revision {
     () => {
@@ -76,8 +159,8 @@ fn log_mem() {
 pub fn shim_main<'a, I>(
     name: &str,
     version: &str,
-    revision: impl Into<Option<&'a str>>,
-    shim_version: impl Into<Option<&'a str>>,
+    revision: impl Into<Option<&'a str>> + std::fmt::Debug,
+    shim_version: impl Into<Option<&'a str>> + std::fmt::Debug,
     config: Option<Config>,
 ) where
     I: 'static + Instance + Sync + Send,
@@ -92,8 +175,8 @@ pub fn shim_main<'a, I>(
         use tokio::runtime::Runtime;
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let _guard = OtlpConfig::build_from_env()
-                .expect("Failed to build OtelConfig.")
+            let otlp_config = OtlpConfig::build_from_env().expect("Failed to build OtelConfig.");
+            let _guard = otlp_config
                 .init()
                 .expect("Failed to initialize OpenTelemetry.");
             shim_main_inner::<I>(name, version, revision, shim_version, config);
@@ -111,12 +194,12 @@ pub fn shim_main<'a, I>(
     log_mem();
 }
 
-#[cfg_attr(feature = "tracing", tracing::instrument(parent = tracing::Span::current(), skip_all, level = "Info"))]
+#[cfg_attr(feature = "tracing", tracing::instrument(level = "Info"))]
 fn shim_main_inner<'a, I>(
     name: &str,
     version: &str,
-    revision: impl Into<Option<&'a str>>,
-    shim_version: impl Into<Option<&'a str>>,
+    revision: impl Into<Option<&'a str>> + std::fmt::Debug,
+    shim_version: impl Into<Option<&'a str>> + std::fmt::Debug,
     config: Option<Config>,
 ) where
     I: 'static + Instance + Sync + Send,
@@ -129,7 +212,12 @@ fn shim_main_inner<'a, I>(
             OtlpConfig::set_trace_context(&ctx).unwrap();
         } else {
             let ctx = OtlpConfig::get_trace_context().unwrap();
-            std::env::set_var("TRACECONTEXT", ctx);
+            // SAFETY: although it's in a multithreaded context,
+            // it's safe to assume that all the other threads are not
+            // messing with env vars at this point.
+            unsafe {
+                std::env::set_var("TRACECONTEXT", ctx);
+            }
         }
     }
     let os_args: Vec<_> = std::env::args_os().collect();

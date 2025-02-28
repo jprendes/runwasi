@@ -1,12 +1,15 @@
 use std::fs::File;
 use std::io::Read;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use super::Source;
 use crate::container::{PathResolve, RuntimeContext};
 use crate::sandbox::oci::WasmLayer;
 
+/// The `Engine` trait provides a simplified API for running WebAssembly containers.
+///
+/// It handles the lifecycle of the container and OCI spec details for you.
 pub trait Engine: Clone + Send + Sync + 'static {
     /// The name to use for this engine
     fn name() -> &'static str;

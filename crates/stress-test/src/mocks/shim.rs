@@ -1,23 +1,28 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail, ensure};
 use log::info;
 use oci_spec::runtime::SpecBuilder;
-use tempfile::{tempdir_in, TempDir};
+use serde::Deserialize;
+use tempfile::{TempDir, tempdir_in};
 use tokio::fs::{canonicalize, symlink};
 use tokio::process::Command;
-use trapeze::Client;
+use tokio_async_drop::tokio_async_drop;
 
 use super::Task;
-use crate::utils::hash;
+use crate::containerd;
+use crate::mocks::task_client::TaskClient;
+use crate::protos::containerd::task::v2::ShutdownRequest;
 
 pub struct Shim {
-    pub(super) dir: TempDir,
-    pub(super) client: Client,
+    dir: TempDir,
+    client: TaskClient,
+    containerd: containerd::Client,
 }
 
 impl Shim {
     pub(super) async fn new(
+        containerd: containerd::Client,
         scratch: impl AsRef<Path>,
         verbose: bool,
         binary: impl AsRef<Path>,
@@ -41,32 +46,93 @@ impl Shim {
 
         info!("Starting shim");
 
-        let hash = hash(dir.path());
-        let output = Command::new(binary.as_ref())
-            .args([
-                "-namespace",
-                &format!("shim-benchmark-{hash}"),
-                "-id",
-                &format!("shim-benchmark-{hash}"),
-                "-address",
-                "/run/containerd/containerd.sock",
-                "start",
-            ])
-            .process_group(0)
-            .env("TTRPC_ADDRESS", socket)
-            .current_dir(dir.path())
-            .output()
-            .await?;
+        let pid = std::process::id();
+        let binary = binary.as_ref();
+        let start_shim = || {
+            Command::new(binary)
+                .args([
+                    "-namespace",
+                    &format!("shim-benchmark-{pid}"),
+                    "-id",
+                    &format!("shim-benchmark-{pid}"),
+                    "-address",
+                    "/run/containerd/containerd.sock",
+                    "start",
+                ])
+                .env("TTRPC_ADDRESS", &socket)
+                .current_dir(dir.path())
+                .output()
+        };
 
-        let address = String::from_utf8(output.stdout)?.trim().to_owned();
+        // Start the shim twice. It seems that with task v3 the first run on the
+        // shim does not return immediately, but rather blocks. Running the shim
+        // twice we make sure that at least one of them will return immediately.
+        // However, the shims may race and one of them would exit with an error
+        // status, but by that time we can run a third and get the output.
+        tokio::select! {
+            o = start_shim() => o,
+            o = start_shim() => o,
+        }?;
+
+        let output = start_shim().await?;
+
+        if !output.status.success() {
+            bail!("failed to start shim: {output:?}");
+        }
+
+        let mut address = String::from_utf8(output.stdout)?.trim().to_owned();
+        if address.starts_with("{") {
+            #[derive(Deserialize)]
+            struct Address {
+                address: String,
+                protocol: String,
+            }
+
+            let parsed: Address = serde_json::from_str(&address)?;
+            ensure!(parsed.protocol == "ttrpc");
+            address = parsed.address;
+        }
 
         info!("Connecting to {address}");
-        let client = Client::connect(address).await?;
+        let client = TaskClient::connect(address).await?;
 
-        Ok(Shim { dir, client })
+        Ok(Shim {
+            dir,
+            client,
+            containerd,
+        })
     }
+}
 
-    pub async fn task(&self) -> Result<Task> {
-        Task::new(&self.dir, self.client.clone()).await
+impl crate::traits::Shim for Shim {
+    type Task = Task;
+
+    async fn task<T: Into<String>>(
+        &self,
+        image: impl Into<String>,
+        args: impl IntoIterator<Item = T>,
+    ) -> Result<Task> {
+        Task::new(
+            self.containerd.clone(),
+            &self.dir,
+            image.into(),
+            args,
+            self.client.clone(),
+        )
+        .await
+    }
+}
+
+impl Drop for Shim {
+    fn drop(&mut self) {
+        tokio_async_drop!({
+            let _ = self
+                .client
+                .shutdown(ShutdownRequest {
+                    now: true,
+                    ..Default::default()
+                })
+                .await;
+        })
     }
 }

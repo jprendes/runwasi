@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use anyhow::Result;
-use tempfile::{tempdir, TempDir};
-use trapeze::{service, Server, ServerHandle};
+use tempfile::{TempDir, tempdir};
+use trapeze::{Server, ServerHandle, service};
 
 use super::Shim;
+use crate::containerd;
 use crate::protos::containerd::services::events::ttrpc::v1::{Events, ForwardRequest};
 
 struct EventsService;
@@ -20,10 +21,11 @@ pub struct Containerd {
     dir: TempDir,
     _server: ServerHandle,
     verbose: bool,
+    containerd: containerd::Client,
 }
 
 impl Containerd {
-    pub async fn new(verbose: bool) -> Result<Self> {
+    pub async fn new(client: containerd::Client, verbose: bool) -> Result<Self> {
         let dir = tempdir()?;
         let socket = dir.path().join("containerd.sock.ttrpc");
 
@@ -36,10 +38,14 @@ impl Containerd {
             dir,
             _server,
             verbose,
+            containerd: client,
         })
     }
+}
 
-    pub async fn start_shim(&self, shim: impl AsRef<Path>) -> Result<Shim> {
-        Shim::new(&self.dir, self.verbose, shim).await
+impl crate::traits::Containerd for Containerd {
+    type Shim = Shim;
+    async fn start_shim(&self, shim: impl AsRef<Path> + Send) -> Result<Shim> {
+        Shim::new(self.containerd.clone(), &self.dir, self.verbose, shim).await
     }
 }

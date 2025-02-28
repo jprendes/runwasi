@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use containerd_shim_wasm::container::{
     Engine, Entrypoint, Instance, RuntimeContext, WasmBinaryType,
 };
@@ -53,7 +53,7 @@ impl<'a> ComponentTarget<'a> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct WasmtimeEngine;
 
 static PRECOMPILER: LazyLock<wasmtime::Engine> = LazyLock::new(|| {
@@ -171,7 +171,7 @@ impl Engine for WasmtimeEngine {
                 Some(Module) => PRECOMPILER.precompile_module(&layer.layer)?,
                 Some(Component) => PRECOMPILER.precompile_component(&layer.layer)?,
                 None => {
-                    log::warn!("Unknow WASM binary type");
+                    log::warn!("Unknown WASM binary type");
                     continue;
                 }
             };
@@ -218,12 +218,12 @@ impl WasmtimeEngineImpl {
             let instance: wasmtime::Instance =
                 module_linker.instantiate_async(&mut store, &module).await?;
 
-            log::info!("getting start function");
+            log::debug!("getting start function");
             let start_func = instance
                 .get_func(&mut store, func)
                 .context("module does not have a WASI start function")?;
 
-            log::debug!("running start function {func:?}");
+            log::info!("running start function {func:?}");
 
             start_func
                 .call_async(&mut store, &[], &mut [])
@@ -416,7 +416,7 @@ fn wasi_builder(ctx: &impl RuntimeContext) -> Result<wasi_preview2::WasiCtxBuild
 async fn wait_for_signal() -> Result<i32> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut sigquit = signal(SignalKind::quit())?;
         let mut sigterm = signal(SignalKind::terminate())?;
 

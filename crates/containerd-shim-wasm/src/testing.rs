@@ -1,7 +1,7 @@
 //! Testing utilities used across different modules
 
 use std::collections::HashMap;
-use std::fs::{self, create_dir, read, read_to_string, write, File};
+use std::fs::{self, File, create_dir, read, read_to_string, write};
 use std::marker::PhantomData;
 use std::ops::Add;
 #[cfg(unix)]
@@ -11,14 +11,15 @@ use std::os::windows::fs::symlink_file as symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 pub use containerd_shim_wasm_test_modules as modules;
 use libc::{SIGINT, SIGTERM};
 use oci_spec::runtime::{
-    get_default_namespaces, LinuxBuilder, LinuxNamespace, LinuxNamespaceType, ProcessBuilder,
-    RootBuilder, SpecBuilder,
+    LinuxBuilder, LinuxNamespace, LinuxNamespaceType, ProcessBuilder, RootBuilder, SpecBuilder,
+    get_default_namespaces,
 };
 
+use crate::sandbox::async_utils::AmbientRuntime as _;
 use crate::sandbox::{Instance, InstanceConfig};
 
 pub const TEST_NAMESPACE: &str = "runwasi-test";
@@ -214,11 +215,15 @@ where
 
         log::info!("building wasi test: {}", dir.display());
 
-        let mut cfg = InstanceConfig::new(TEST_NAMESPACE, "/run/containerd/containerd.sock");
-        cfg.set_bundle(dir)
-            .set_stdout(dir.join("stdout"))
-            .set_stderr(dir.join("stderr"))
-            .set_stdin(dir.join("stdin"));
+        let cfg = InstanceConfig {
+            namespace: TEST_NAMESPACE.to_string(),
+            containerd_address: "/run/containerd/containerd.sock".to_string(),
+            bundle: dir.to_path_buf(),
+            stdout: dir.join("stdout"),
+            stderr: dir.join("stderr"),
+            stdin: dir.join("stdin"),
+            ..Default::default()
+        };
 
         let instance = WasiInstance::new(self.container_name, &cfg)?;
         Ok(WasiTest { instance, tempdir })
@@ -269,9 +274,9 @@ where
         Ok(self)
     }
 
-    pub fn wait(&self, timeout: Duration) -> Result<(u32, String, String)> {
+    pub fn wait(&self, t: Duration) -> Result<(u32, String, String)> {
         log::info!("waiting wasi test");
-        let (status, _) = match self.instance.wait_timeout(timeout) {
+        let (status, _) = match self.instance.wait().with_timeout(t).block_on() {
             Some(res) => res,
             None => {
                 self.instance.kill(SIGKILL)?;
@@ -311,11 +316,11 @@ where
 }
 
 pub mod oci_helpers {
-    use std::fs::{write, File};
+    use std::fs::{File, write};
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use anyhow::{bail, Result};
+    use anyhow::{Result, bail};
     use oci_spec::image::{self as spec, Arch};
     use oci_tar_builder::Builder;
 

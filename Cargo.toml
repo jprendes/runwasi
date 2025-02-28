@@ -9,12 +9,12 @@ members = [
     "crates/containerd-shim-wasmer",
     "crates/containerd-shim-wamr",
     "crates/stress-test",
-    "benches/containerd-shim-benchmarks",
+    "benches/containerd-shim-benchmarks", 
 ]
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 version = "0.4.0"
 license = "Apache-2.0"
 readme = "README.md"
@@ -23,14 +23,13 @@ homepage = "https://github.com/containerd/runwasi"
 
 [workspace.dependencies]
 anyhow = "1.0"
-cap-std = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 containerd-shim = "0.8"
 containerd-shim-wasm = { path = "crates/containerd-shim-wasm", version = "0.9.0" }
 containerd-shim-wasm-test-modules = { path = "crates/containerd-shim-wasm-test-modules", version = "0.4.0"}
 oci-tar-builder = { path = "crates/oci-tar-builder", version = "0.4.0" }
 env_logger = "0.11"
-libc = "0.2.169"
+libc = "0.2.170"
 libcontainer = { version = "0.5", default-features = false }
 log = "0.4"
 nix = "0.29"
@@ -40,13 +39,13 @@ serde = "1.0"
 serde_json = "1.0"
 sha256 = "1.5.0"
 tar = "0.4"
-tempfile = "3.15"
+tempfile = "3.17"
 thiserror = "2.0"
-wat = "1.223"
+wat = "1.226"
 windows-sys = "0.59"
 serial_test = "3"
 tracing = "0.1"
-hyper = "1.5.2"
+hyper = "1.6.0"
 tokio = { version = "1.43.0", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 

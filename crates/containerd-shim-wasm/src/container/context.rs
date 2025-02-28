@@ -1,13 +1,15 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use oci_spec::image::Platform;
 use oci_spec::runtime::Spec;
 
 use crate::container::path::PathResolve;
 use crate::sandbox::oci::WasmLayer;
 
+/// The `RuntimeContext` trait provides access to the runtime context that includes
+/// the arguments, environment variables, and entrypoint for the container.
 pub trait RuntimeContext {
     // ctx.args() returns arguments from the runtime spec process field, including the
     // path to the entrypoint executable.

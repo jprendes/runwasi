@@ -96,7 +96,7 @@ jobs:
       - name: Start wasmtime shim
         shell: bash
         run: |
-          sudo ctr run --rm --net-host --runtime=io.containerd.wasmtime.v1 ghcr.io/containerd/runwasi/wasi-http:latest wasi-http /wasi-http.wasm &
+          sudo ctr run --rm --net-host --runtime=io.containerd.wasmtime.v1 ghcr.io/containerd/runwasi/wasi-demo-http:latest wasi-http /wasi-http.wasm &
           sleep 1
       - name: Wait for wasmtime shim to start
         shell: bash
@@ -104,6 +104,7 @@ jobs:
           while ! curl -s http://127.0.0.1:8080 > /dev/null; do
             sleep 1
           done
+        timeout-minutes: 5
       - name: Run HTTP throughput and latency benchmarks
         if: success()
         uses: ./.github/actions/run-hey-load-test
@@ -114,3 +115,50 @@ jobs:
         shell: bash
         run: |
           sudo ctr task kill -s SIGKILL wasi-http
+
+  benchmark-stress:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: '' #Disable.  By default this action sets environment variable is set to -D warnings.  We manage this in the Makefile
+      - uses: ./.github/actions/setup-env
+      - name: Setup build profile
+        shell: bash
+        run: |
+          echo "OPT_PROFILE=release" >> ${GITHUB_ENV}
+          echo "STRESS_TEST_COUNT=1000" >> ${GITHUB_ENV}
+          echo "STRESS_TEST_TIMEOUT=10s" >> ${GITHUB_ENV}
+      - uses: ./.github/actions/build
+      - name: Run Stress Tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for RUNTIME in wasmtime wasmedge wasmer wamr; do
+            # Run containerd stress tests with different images
+            for IMAGE_TYPE in app oci; do
+              make test/stress-c8d-$RUNTIME \
+                STRESS_TEST_JSON=stress-bench-c8d-${IMAGE_TYPE}-${RUNTIME}.json \
+                STRESS_TEST_IMAGE=ghcr.io/containerd/runwasi/wasi-demo-${IMAGE_TYPE}:latest
+            done
+
+            # Run non-containerd stress test
+            make test/stress-$RUNTIME \
+              STRESS_TEST_JSON=stress-bench-${RUNTIME}.json \
+              STRESS_TEST_IMAGE=ghcr.io/containerd/runwasi/wasi-demo-app:latest
+          done
+          cat stress-bench-*.json | jq -s 'flatten(1)' > stress-bench.json
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1.20.4
+        with:
+          name: Stress Test Benchmark
+          tool: 'customBiggerIsBetter'
+          output-file-path: stress-bench.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          alert-threshold: '130%'
+          fail-on-alert: ${{ github.event_name == 'schedule' }}
+          alert-comment-cc-users: '@runwasi-committers'
+          summary-always: true
+          auto-push: ${{ github.event_name == 'schedule' }}
