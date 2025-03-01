@@ -93,6 +93,7 @@ where
         // Removing the `network` namespace results in the binding to the host's socket.
         // This allows for direct communication with the host's networking interface.
         self.namespaces
+            // typos:disable-next-line - false positive "typ"
             .retain(|ns| ns.typ() != LinuxNamespaceType::Network);
         self
     }
