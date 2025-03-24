@@ -80,21 +80,21 @@
 //!
 
 use crate::Config;
-use crate::container::{Engine, Instance};
+use crate::container::{Instance, Shim};
 
 /// Main entry point for the shim.
 ///
 /// If the `opentelemetry` feature is enabled, this function will start the shim with OpenTelemetry tracing.
 ///
 /// It parses OTLP configuration from the environment and initializes the OpenTelemetry SDK.
-pub fn shim_main<'a, E: Engine + Default>(
+pub fn shim_main<'a, S: Shim + Default>(
     name: &str,
     version: &str,
     revision: impl Into<Option<&'a str>> + std::fmt::Debug,
     shim_version: impl Into<Option<&'a str>> + std::fmt::Debug,
     config: Option<Config>,
 ) {
-    containerd_shimkit::sandbox::cli::shim_main::<Instance<E>>(
+    containerd_shimkit::sandbox::cli::shim_main::<Instance<S>>(
         name,
         version,
         revision,
