@@ -12,7 +12,7 @@ use crate::sandbox::oci::WasmLayer;
 ///
 /// It handles the lifecycle of the container and OCI spec details for you.
 #[trait_variant::make(Send)]
-pub trait Shim: Clone + Send + Sync + 'static {
+pub trait Shim: Sync + 'static {
     /// The name to use for this shim
     fn name() -> &'static str;
 
