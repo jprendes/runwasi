@@ -70,7 +70,12 @@ async fn generate_wasm_artifact(args: Args, out_dir: PathBuf) -> Result<(), anyh
     );
 
     let module_path = PathBuf::from(path);
-    builder.add_layer_with_media_type(&module_path, oci_wasm::WASM_LAYER_MEDIA_TYPE.to_string());
+    builder.add_layer_with_media_type(
+        &module_path,
+        args.media_type
+            .clone()
+            .unwrap_or(oci_wasm::WASM_LAYER_MEDIA_TYPE.to_string()),
+    );
 
     println!("Creating oci tar file {}", out_dir.clone().display());
     let f = File::create(out_dir.clone())?;
@@ -99,7 +104,9 @@ fn generate_wasi_image(args: Args, out_dir: PathBuf) -> Result<(), anyhow::Error
         let module_path = PathBuf::from(module_path);
         builder.add_layer_with_media_type(
             &module_path,
-            oci_tar_builder::WASM_LAYER_MEDIA_TYPE.to_string(),
+            args.media_type
+                .clone()
+                .unwrap_or(oci_wasm::WASM_LAYER_MEDIA_TYPE.to_string()),
         );
 
         layer_digests
@@ -131,7 +138,9 @@ fn generate_wasi_image(args: Args, out_dir: PathBuf) -> Result<(), anyhow::Error
                 "wasm" => {
                     builder.add_layer_with_media_type(
                         &path,
-                        oci_tar_builder::WASM_LAYER_MEDIA_TYPE.to_string(),
+                        args.media_type
+                            .clone()
+                            .unwrap_or(oci_wasm::WASM_LAYER_MEDIA_TYPE.to_string()),
                     );
                     layer_digests
                         .push(try_digest(&path).context("failed to calculate digest for module")?);
@@ -213,4 +222,7 @@ struct Args {
 
     #[arg(short, long)]
     as_artifact: bool,
+
+    #[arg(short = 'M', long)]
+    media_type: Option<String>,
 }
